@@ -1098,11 +1098,11 @@ export function MultiSelectMenu(props: MultiSelectMenuProps) {
                                     Object.keys(selectedUuids[AggregationType.Domain]).map((u) => {
                                         promises.push(
                                             Api.workspaces.domains.delete(workspace, u).then((result) => {
-                                                if (result.is_err()) {
+                                                if (result.isErr) {
                                                     numErr += 1;
                                                     handleApiError(result);
                                                     stillSelected[AggregationType.Domain][u] = true;
-                                                } else if (result.is_ok()) {
+                                                } else if (result.isOk) {
                                                     numOk += 1;
                                                 }
                                             }),
@@ -1113,11 +1113,11 @@ export function MultiSelectMenu(props: MultiSelectMenuProps) {
                                     Object.keys(selectedUuids[AggregationType.Host]).map((u) => {
                                         promises.push(
                                             Api.workspaces.hosts.delete(workspace, u).then((result) => {
-                                                if (result.is_err()) {
+                                                if (result.isErr) {
                                                     numErr += 1;
                                                     handleApiError(result);
                                                     stillSelected[AggregationType.Host][u] = true;
-                                                } else if (result.is_ok()) {
+                                                } else if (result.isOk) {
                                                     numOk += 1;
                                                 }
                                             }),
@@ -1128,11 +1128,11 @@ export function MultiSelectMenu(props: MultiSelectMenuProps) {
                                     Object.keys(selectedUuids[AggregationType.Port]).map((u) => {
                                         promises.push(
                                             Api.workspaces.ports.delete(workspace, u).then((result) => {
-                                                if (result.is_err()) {
+                                                if (result.isErr) {
                                                     numErr += 1;
                                                     handleApiError(result);
                                                     stillSelected[AggregationType.Port][u] = true;
-                                                } else if (result.is_ok()) {
+                                                } else if (result.isOk) {
                                                     numOk += 1;
                                                 }
                                             }),
@@ -1143,11 +1143,11 @@ export function MultiSelectMenu(props: MultiSelectMenuProps) {
                                     Object.keys(selectedUuids[AggregationType.Service]).map((u) => {
                                         promises.push(
                                             Api.workspaces.services.delete(workspace, u).then((result) => {
-                                                if (result.is_err()) {
+                                                if (result.isErr) {
                                                     numErr += 1;
                                                     handleApiError(result);
                                                     stillSelected[AggregationType.Service][u] = true;
-                                                } else if (result.is_ok()) {
+                                                } else if (result.isOk) {
                                                     numOk += 1;
                                                 }
                                             }),
@@ -1242,7 +1242,11 @@ async function resolveSelection(
     services: FullService[];
     ports: FullPort[];
 }> {
-    const unwrap = (e: Result<any, ApiError>) => (skipInvalid && !e.is_ok() ? undefined : e.unwrap());
+    const unwrap = (e: Result<any, ApiError>) => {
+        if (e.isOk) return e.ok;
+        else if (skipInvalid) return undefined;
+        else throw e.err;
+    };
 
     return {
         domains: (

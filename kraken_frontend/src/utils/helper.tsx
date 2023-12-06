@@ -1,5 +1,5 @@
 import { toast } from "react-toastify";
-import { Result } from "./result";
+import { Err, Ok, Result } from "./result";
 import { ApiError } from "../api/error";
 import { inspectError } from "../context/user";
 import { OsType } from "../api/generated";
@@ -166,7 +166,7 @@ export function handleApiError<T>(then?: (ok: T) => any): (result: Result<T, Api
  */
 export function handleApiError<T>(result: Result<T, ApiError>, then?: (ok: T) => any): void;
 export function handleApiError<T>(then_or_result?: ((ok: T) => any) | Result<T, ApiError>, then?: (ok: T) => any): any {
-    if (then_or_result !== undefined && then_or_result instanceof Result) {
+    if (then_or_result !== undefined && ("ok" in then_or_result || "err" in then_or_result)) {
         then_or_result.match(then || noop, handleError);
     } else {
         if (then_or_result === undefined) return noopHandler;

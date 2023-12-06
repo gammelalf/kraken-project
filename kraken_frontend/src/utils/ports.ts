@@ -8,7 +8,7 @@ import { Err, Ok, Result } from "./result";
 export function parseUserPorts(input: string): Result<PortOrRange[], string> {
     let parts = input.split(/[, ]+/g);
     try {
-        return Ok(
+        return new Ok(
             parts.map((part) => {
                 let p = parseUserPort(part);
                 if (p !== false) return p;
@@ -25,7 +25,7 @@ export function parseUserPorts(input: string): Result<PortOrRange[], string> {
             }),
         );
     } catch (e) {
-        return Err("" + e);
+        return new Err("" + e);
     }
 }
 

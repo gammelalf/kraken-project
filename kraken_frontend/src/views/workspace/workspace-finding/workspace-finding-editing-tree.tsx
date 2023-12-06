@@ -94,12 +94,12 @@ export const EditingTreeGraph = forwardRef<EditingTreeGraphRef, EditingTreeGraph
         { affectedUuid: affected, _index }: SimpleFindingAffected & { _index?: number },
     ): Promise<Result<{ affected: AffectedShallow }, ApiError>> {
         if (_index === undefined)
-            return Err({
+            return new Err({
                 message: "invalid ID",
                 status_code: StatusCode.ArbitraryJSError,
             });
         const obj = props.affected[_index];
-        if ("affected" in obj) return Ok(obj);
+        if ("affected" in obj) return new Ok(obj);
         const uuid = getUuid(obj);
         let result: AffectedShallow;
         switch ("affectedType" in obj ? obj.affectedType : obj.type) {
@@ -116,7 +116,7 @@ export const EditingTreeGraph = forwardRef<EditingTreeGraphRef, EditingTreeGraph
                 result = { service: { uuid } };
                 break;
         }
-        return Ok({
+        return new Ok({
             affected: result,
         });
     };
