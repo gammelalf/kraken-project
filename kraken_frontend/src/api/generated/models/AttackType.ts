@@ -30,7 +30,8 @@ export const AttackType = {
     ForcedBrowsing: 'ForcedBrowsing',
     OsDetection: 'OSDetection',
     VersionDetection: 'VersionDetection',
-    AntiPortScanningDetection: 'AntiPortScanningDetection'
+    AntiPortScanningDetection: 'AntiPortScanningDetection',
+    PortGuesser: 'PortGuesser'
 } as const;
 export type AttackType = typeof AttackType[keyof typeof AttackType];
 

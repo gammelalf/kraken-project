@@ -537,6 +537,7 @@ pub enum SourceType {
     ManualPort,
     /// The [`ManualService`] table
     ManualService,
+    PortGuesser,
 }
 
 /// Enum used in [`AggregationSource`] to identify which table it points to

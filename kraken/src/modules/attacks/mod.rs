@@ -35,6 +35,7 @@ mod certificate_transparency;
 mod dehashed_query;
 mod dns_resolution;
 mod host_alive;
+mod port_guesser;
 mod service_detection;
 mod tcp_port_scan;
 
@@ -255,6 +256,27 @@ pub async fn start_tcp_port_scan(
         tokio::spawn(async move {
             ctx.set_started().await;
             let result = ctx.tcp_port_scan(leech, params).await;
+            ctx.set_finished(result).await;
+        }),
+    ))
+}
+
+pub struct PortGuesserParams {
+    pub targets: Vec<DomainOrNetwork>,
+    pub num_ports: u32,
+}
+pub async fn start_port_guesser(
+    workspace: Uuid,
+    user: Uuid,
+    leech: LeechClient,
+    params: PortGuesserParams,
+) -> Result<(Uuid, JoinHandle<()>), InsertAttackError> {
+    let ctx = AttackContext::new(workspace, user, AttackType::PortGuesser).await?;
+    Ok((
+        ctx.attack_uuid,
+        tokio::spawn(async move {
+            ctx.set_started().await;
+            let result = ctx.port_guesser(leech, params).await;
             ctx.set_finished(result).await;
         }),
     ))

@@ -29,5 +29,6 @@ export const ATTACKS: AttackResolver = {
     },
     UdpPortScan: { abbreviation: "PsU", long: "UDP port scan", key: "udpPortScan" },
     VersionDetection: { abbreviation: "VsD", long: "Version detection", key: "versionDetection" },
+    PortGuesser: { abbreviation: "PG", long: "Port guesser", key: "portGuesser" },
     Undefined: { abbreviation: "?", long: "Undefined", key: "undefined" },
 };

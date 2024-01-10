@@ -4,7 +4,7 @@ use utoipa::{IntoParams, ToSchema};
 pub use utoipa_fix::Page;
 pub(crate) use utoipa_fix::{
     BruteforceSubdomainsResultsPage, DnsResolutionResultsPage, DomainResultsPage,
-    HostAliveResultsPage, HostResultsPage, PortResultsPage,
+    HostAliveResultsPage, HostResultsPage, PortGuesserResultsPage, PortResultsPage,
     QueryCertificateTransparencyResultsPage, QueryUnhashedResultsPage, SearchResultPage,
     SearchesResultPage, ServiceDetectionResultsPage, ServiceResultsPage, TcpPortScanResultsPage,
 };
@@ -45,7 +45,7 @@ mod utoipa_fix {
     use crate::api::handler::attack_results::schema::{
         FullQueryCertificateTransparencyResult, FullServiceDetectionResult,
         SimpleBruteforceSubdomainsResult, SimpleDnsResolutionResult, SimpleHostAliveResult,
-        SimpleQueryUnhashedResult, SimpleTcpPortScanResult,
+        SimplePortGuesserResult, SimpleQueryUnhashedResult, SimpleTcpPortScanResult,
     };
     use crate::api::handler::domains::schema::FullDomain;
     use crate::api::handler::hosts::schema::FullHost;
@@ -67,6 +67,7 @@ mod utoipa_fix {
         HostAliveResultsPage = Page<SimpleHostAliveResult>,
         ServiceDetectionResultsPage = Page<FullServiceDetectionResult>,
         DnsResolutionResultsPage = Page<SimpleDnsResolutionResult>,
+        PortGuesserResultsPage = Page<SimplePortGuesserResult>,
         SearchResultPage = Page<SearchResultEntry>,
         SearchesResultPage = Page<SearchEntry>,
     )]

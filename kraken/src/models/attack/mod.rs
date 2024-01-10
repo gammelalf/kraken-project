@@ -48,6 +48,7 @@ pub enum AttackType {
     VersionDetection,
     /// Detect an anti port scan system
     AntiPortScanningDetection,
+    PortGuesser,
 }
 
 /// Representation of an attack
@@ -316,4 +317,20 @@ pub struct ServiceDetectionResult {
 
     /// The found names of the service
     pub service_names: BackRef<field!(ServiceDetectionName::F.result)>,
+}
+
+#[derive(Model)]
+pub struct PortGuesserResult {
+    #[rorm(primary_key)]
+    pub uuid: Uuid,
+
+    #[rorm(on_delete = "Cascade", on_update = "Cascade")]
+    pub attack: ForeignModel<Attack>,
+
+    #[rorm(auto_create_time)]
+    pub created_at: DateTime<Utc>,
+
+    pub host: IpNetwork,
+
+    pub port: i32,
 }

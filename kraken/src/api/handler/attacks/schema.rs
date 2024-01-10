@@ -203,6 +203,15 @@ pub struct DnsResolutionRequest {
     pub workspace_uuid: Uuid,
 }
 
+#[derive(Deserialize, Serialize, Debug, ToSchema)]
+pub struct PortGuesserRequest {
+    pub leech_uuid: Option<Uuid>,
+    #[schema(value_type = Vec<String>)]
+    pub targets: Vec<DomainOrNetwork>,
+    pub num_ports: u32,
+    pub workspace_uuid: Uuid,
+}
+
 /// A simple version of an attack
 #[derive(Clone, Serialize, Deserialize, ToSchema, Debug)]
 pub struct SimpleAttack {

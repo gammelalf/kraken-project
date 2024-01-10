@@ -13,12 +13,12 @@
  */
 
 import { exists, mapValues } from '../runtime';
-import type { SimpleDnsResolutionResult } from './SimpleDnsResolutionResult';
+import type { SimplePortGuesserResult } from './SimplePortGuesserResult';
 import {
-    SimpleDnsResolutionResultFromJSON,
-    SimpleDnsResolutionResultFromJSONTyped,
-    SimpleDnsResolutionResultToJSON,
-} from './SimpleDnsResolutionResult';
+    SimplePortGuesserResultFromJSON,
+    SimplePortGuesserResultFromJSONTyped,
+    SimplePortGuesserResultToJSON,
+} from './SimplePortGuesserResult';
 import type { SimpleUser } from './SimpleUser';
 import {
     SimpleUserFromJSON,

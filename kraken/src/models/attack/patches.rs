@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use crate::models::{
     Attack, CertificateTransparencyResult, CertificateTransparencyValueName, DehashedQueryResult,
-    DnsRecordResult, DnsRecordType, HostAliveResult, ServiceCertainty, ServiceDetectionResult,
-    TcpPortScanResult,
+    DnsRecordResult, DnsRecordType, HostAliveResult, PortGuesserResult, ServiceCertainty,
+    ServiceDetectionResult, TcpPortScanResult,
 };
 
 pub(crate) type BruteforceSubdomainsResultInsert = DnsRecordResultInsert;
@@ -82,6 +82,15 @@ pub(crate) struct ServiceDetectionResultInsert {
     pub(crate) uuid: Uuid,
     pub(crate) attack: ForeignModel<Attack>,
     pub(crate) certainty: ServiceCertainty,
+    pub(crate) host: IpNetwork,
+    pub(crate) port: i32,
+}
+
+#[derive(Patch)]
+#[rorm(model = "PortGuesserResult")]
+pub(crate) struct PortGuesserResultInsert {
+    pub(crate) uuid: Uuid,
+    pub(crate) attack: ForeignModel<Attack>,
     pub(crate) host: IpNetwork,
     pub(crate) port: i32,
 }

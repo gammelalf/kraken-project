@@ -193,3 +193,13 @@ pub struct SimpleDnsResolutionResult {
     #[schema(inline)]
     pub dns_record_type: DnsRecordType,
 }
+
+#[derive(Serialize, Deserialize, ToSchema, Debug, Clone)]
+pub struct SimplePortGuesserResult {
+    pub uuid: Uuid,
+    pub attack: Uuid,
+    pub created_at: DateTime<Utc>,
+    #[schema(value_type = String, example = "127.0.0.1")]
+    pub address: IpNetwork,
+    pub port: u16,
+}

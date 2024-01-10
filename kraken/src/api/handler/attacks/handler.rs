@@ -8,8 +8,8 @@ use rorm::{query, FieldAccess, Model};
 use crate::api::extractors::SessionUser;
 use crate::api::handler::attacks::schema::{
     BruteforceSubdomainsRequest, DnsResolutionRequest, HostsAliveRequest, ListAttacks,
-    QueryCertificateTransparencyRequest, QueryDehashedRequest, ScanTcpPortsRequest,
-    ServiceDetectionRequest, SimpleAttack,
+    PortGuesserRequest, QueryCertificateTransparencyRequest, QueryDehashedRequest,
+    ScanTcpPortsRequest, ServiceDetectionRequest, SimpleAttack,
 };
 use crate::api::handler::common::error::{ApiError, ApiResult};
 use crate::api::handler::common::schema::{PathUuid, UuidResponse};
@@ -19,9 +19,10 @@ use crate::chan::global::GLOBAL;
 use crate::models::{Attack, User, UserPermission, WordList, Workspace, WorkspaceMember};
 use crate::modules::attacks::{
     start_bruteforce_subdomains, start_certificate_transparency, start_dehashed_query,
-    start_dns_resolution, start_host_alive, start_service_detection, start_tcp_port_scan,
-    BruteforceSubdomainsParams, CertificateTransparencyParams, DehashedQueryParams,
-    DnsResolutionParams, HostAliveParams, ServiceDetectionParams, TcpPortScanParams,
+    start_dns_resolution, start_host_alive, start_port_guesser, start_service_detection,
+    start_tcp_port_scan, BruteforceSubdomainsParams, CertificateTransparencyParams,
+    DehashedQueryParams, DnsResolutionParams, HostAliveParams, PortGuesserParams,
+    ServiceDetectionParams, TcpPortScanParams,
 };
 
 /// Bruteforce subdomains through a DNS wordlist attack
@@ -374,6 +375,50 @@ pub async fn dns_resolution(
             targets,
             concurrent_limit,
         },
+    )
+    .await?;
+
+    Ok(HttpResponse::Accepted().json(UuidResponse { uuid: attack_uuid }))
+}
+
+#[utoipa::path(
+    tag = "Attacks",
+    context_path = "/api/v1",
+    responses(
+        (status = 202, description = "Attack scheduled", body = UuidResponse),
+        (status = 400, description = "Client error", body = ApiErrorResponse),
+        (status = 500, description = "Server error", body = ApiErrorResponse)
+    ),
+    request_body = PortGuesserRequest,
+    security(("api_key" = []))
+)]
+#[post("/attacks/portGuesser")]
+pub async fn port_guesser(
+    req: Json<PortGuesserRequest>,
+    SessionUser(user_uuid): SessionUser,
+) -> ApiResult<HttpResponse> {
+    let PortGuesserRequest {
+        leech_uuid,
+        targets,
+        num_ports,
+        workspace_uuid,
+    } = req.into_inner();
+
+    if targets.is_empty() {
+        return Err(ApiError::EmptyTargets);
+    }
+
+    let client = if let Some(leech_uuid) = leech_uuid {
+        GLOBAL.leeches.get_leech(&leech_uuid)?
+    } else {
+        GLOBAL.leeches.random_leech()?
+    };
+
+    let (attack_uuid, _) = start_port_guesser(
+        workspace_uuid,
+        user_uuid,
+        client,
+        PortGuesserParams { targets, num_ports },
     )
     .await?;
 

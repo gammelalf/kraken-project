@@ -42,6 +42,7 @@ use crate::modules::bruteforce_subdomains::{
 };
 use crate::modules::certificate_transparency::{query_ct_api, CertificateTransparencySettings};
 use crate::modules::host_alive::icmp_scan::{start_icmp_scan, IcmpScanSettings};
+use crate::modules::port_guesser::{port_guesser, PortGuesserSettings};
 use crate::modules::port_scanner::tcp_con::{start_tcp_con_port_scan, TcpPortScannerSettings};
 use crate::modules::service_detection::DetectServiceSettings;
 use crate::modules::{dehashed, service_detection, whois};
@@ -178,6 +179,13 @@ pub enum RunCommand {
         /// When this flag is enabled it will always run all checks producing their logs before returning the first match.
         #[clap(long)]
         dont_stop_on_match: bool,
+    },
+    PortGuesser {
+        #[clap(required(true))]
+        targets: Vec<String>,
+
+        #[clap(short, long, default_value_t = 4)]
+        num_ports: u32,
     },
 }
 
@@ -357,6 +365,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             } else {
                 match command {
+                    RunCommand::PortGuesser { targets, num_ports } => {
+                        let addresses = targets
+                            .iter()
+                            .map(|s| IpNetwork::from_str(s))
+                            .collect::<Result<_, _>>()?;
+                        let (tx, mut rx) = mpsc::channel(1);
+                        task::spawn(port_guesser(
+                            PortGuesserSettings {
+                                addresses,
+                                num_ports,
+                            },
+                            tx,
+                        ));
+                        while let Some(res) = rx.recv().await {
+                            info!("I guess {}:{} is open", res.host, res.port);
+                        }
+                    }
                     RunCommand::BruteforceSubdomains {
                         target,
                         wordlist_path,

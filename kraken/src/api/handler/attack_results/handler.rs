@@ -11,20 +11,21 @@ use crate::api::extractors::SessionUser;
 use crate::api::handler::attack_results::schema::{
     FullQueryCertificateTransparencyResult, FullServiceDetectionResult,
     SimpleBruteforceSubdomainsResult, SimpleDnsResolutionResult, SimpleHostAliveResult,
-    SimpleQueryUnhashedResult, SimpleTcpPortScanResult,
+    SimplePortGuesserResult, SimpleQueryUnhashedResult, SimpleTcpPortScanResult,
 };
 use crate::api::handler::common::error::{ApiError, ApiResult};
 use crate::api::handler::common::schema::{
     BruteforceSubdomainsResultsPage, DnsResolutionResultsPage, HostAliveResultsPage, Page,
-    PageParams, PathUuid, QueryCertificateTransparencyResultsPage, QueryUnhashedResultsPage,
-    ServiceDetectionResultsPage, TcpPortScanResultsPage,
+    PageParams, PathUuid, PortGuesserResultsPage, QueryCertificateTransparencyResultsPage,
+    QueryUnhashedResultsPage, ServiceDetectionResultsPage, TcpPortScanResultsPage,
 };
 use crate::api::handler::common::utils::get_page_params;
 use crate::chan::global::GLOBAL;
 use crate::models::{
     Attack, BruteforceSubdomainsResult, CertificateTransparencyResult,
     CertificateTransparencyValueName, DehashedQueryResult, DnsResolutionResult, HostAliveResult,
-    ServiceCertainty, ServiceDetectionName, ServiceDetectionResult, TcpPortScanResult,
+    PortGuesserResult, ServiceCertainty, ServiceDetectionName, ServiceDetectionResult,
+    TcpPortScanResult,
 };
 
 /// Retrieve a bruteforce subdomains' results by the attack's id
@@ -497,6 +498,63 @@ pub async fn get_dns_resolution_results(
             destination: x.destination,
             dns_record_type: x.dns_record_type,
             created_at: x.created_at,
+        })
+        .try_collect()
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(Json(Page {
+        items,
+        limit,
+        offset,
+        total: total as u64,
+    }))
+}
+
+/// Retrieve a port guesser's results by the attack's id
+#[utoipa::path(
+    tag = "Attacks",
+    context_path = "/api/v1",
+    responses(
+        (status = 200, description = "Returns attack's results", body = PortGuesserResultsPage),
+        (status = 400, description = "Client error", body = ApiErrorResponse),
+        (status = 500, description = "Server error", body = ApiErrorResponse),
+    ),
+    params(PathUuid, PageParams),
+    security(("api_key" = []))
+)]
+#[get("/attacks/{uuid}/portGuesserResults")]
+pub async fn get_port_guesser_results(
+    path: Path<PathUuid>,
+    page_params: Query<PageParams>,
+    SessionUser(user_uuid): SessionUser,
+) -> ApiResult<Json<PortGuesserResultsPage>> {
+    let mut tx = GLOBAL.db.start_transaction().await?;
+
+    let attack_uuid = path.uuid;
+    let (limit, offset) = get_page_params(page_params.0).await?;
+
+    if !Attack::has_access(&mut tx, attack_uuid, user_uuid).await? {
+        return Err(ApiError::MissingPrivileges);
+    }
+
+    let (total,) = query!(&mut tx, (PortGuesserResult::F.uuid.count(),))
+        .condition(PortGuesserResult::F.attack.equals(attack_uuid))
+        .one()
+        .await?;
+
+    let items = query!(&mut tx, PortGuesserResult)
+        .condition(PortGuesserResult::F.attack.equals(attack_uuid))
+        .limit(limit)
+        .offset(offset)
+        .stream()
+        .map_ok(|x| SimplePortGuesserResult {
+            uuid: x.uuid,
+            attack: *x.attack.key(),
+            created_at: x.created_at,
+            address: x.host,
+            port: x.port as u16,
         })
         .try_collect()
         .await?;

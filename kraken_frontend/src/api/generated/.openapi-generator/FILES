@@ -108,6 +108,8 @@ models/OpenRequestInfo.ts
 models/OsType.ts
 models/PageParams.ts
 models/PortCertainty.ts
+models/PortGuesserRequest.ts
+models/PortGuesserResultsPage.ts
 models/PortOrRange.ts
 models/PortProtocol.ts
 models/PortRelations.ts
@@ -166,6 +168,7 @@ models/SimpleHostAliveResult.ts
 models/SimpleLeech.ts
 models/SimpleOauthClient.ts
 models/SimplePort.ts
+models/SimplePortGuesserResult.ts
 models/SimpleQueryUnhashedResult.ts
 models/SimpleService.ts
 models/SimpleTag.ts
@@ -183,6 +186,7 @@ models/SourceAttackResultOneOf3.ts
 models/SourceAttackResultOneOf4.ts
 models/SourceAttackResultOneOf5.ts
 models/SourceAttackResultOneOf6.ts
+models/SourceAttackResultOneOf7.ts
 models/TagType.ts
 models/TcpPortScanResultsPage.ts
 models/TransferWorkspaceRequest.ts

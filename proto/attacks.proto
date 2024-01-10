@@ -196,6 +196,17 @@ message DnsResolutionResponse {
   shared.DNSRecord record = 1;
 }
 
+message PortGuesserRequest {
+  string attack_uuid = 1;
+  repeated attacks.shared.NetOrAddress targets = 2;
+  uint32 num_ports = 3;
+}
+
+message PortGuesserResponse {
+  attacks.shared.Address host = 1;
+  uint32 port = 2;
+}
+
 // Implemented by leech; allows kraken to request attack from a leech
 service ReqAttackService {
   rpc BruteforceSubdomains(BruteforceSubdomainRequest) returns (stream BruteforceSubdomainResponse);
@@ -204,6 +215,7 @@ service ReqAttackService {
   rpc ServiceDetection(ServiceDetectionRequest) returns (ServiceDetectionResponse);
   rpc HostsAliveCheck(HostsAliveRequest) returns (stream HostsAliveResponse);
   rpc DnsResolution(DnsResolutionRequest) returns (stream DnsResolutionResponse);
+  rpc PortGuesser(PortGuesserRequest) returns (stream PortGuesserResponse);
 }
 
 /*
@@ -232,6 +244,7 @@ message PushAttackRequest {
     RepeatedHostsAliveResponse hosts_alive = 7;
     // Response streamed by a dns resolution attack
     RepeatedDnsResolutionResponse dns_resolution = 8;
+    RepeatedPortGuesserResponse port_guesser = 9;
   }
 }
 
@@ -254,6 +267,10 @@ message RepeatedHostsAliveResponse {
 message RepeatedDnsResolutionResponse {
   // repeated DnsResolutionResponse
   repeated DnsResolutionResponse responses = 1;
+}
+
+message RepeatedPortGuesserResponse {
+  repeated PortGuesserResponse responses = 1;
 }
 
 // Response to a manually pushed attack
@@ -303,6 +320,7 @@ message AnyAttackResponse {
     HostsAliveResponse hosts_alive = 6;
     // Response streamed by a dns resolution attack
     DnsResolutionResponse dns_resolution = 7;
+    PortGuesserResponse port_guesser = 8;
   }
 }
 

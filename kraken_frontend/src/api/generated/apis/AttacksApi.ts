@@ -23,6 +23,8 @@ import type {
   HostAliveResultsPage,
   HostsAliveRequest,
   ListAttacks,
+  PortGuesserRequest,
+  PortGuesserResultsPage,
   QueryCertificateTransparencyRequest,
   QueryCertificateTransparencyResultsPage,
   QueryDehashedRequest,
@@ -51,6 +53,10 @@ import {
     HostsAliveRequestToJSON,
     ListAttacksFromJSON,
     ListAttacksToJSON,
+    PortGuesserRequestFromJSON,
+    PortGuesserRequestToJSON,
+    PortGuesserResultsPageFromJSON,
+    PortGuesserResultsPageToJSON,
     QueryCertificateTransparencyRequestFromJSON,
     QueryCertificateTransparencyRequestToJSON,
     QueryCertificateTransparencyResultsPageFromJSON,
@@ -107,6 +113,12 @@ export interface GetHostAliveResultsRequest {
     offset: number;
 }
 
+export interface GetPortGuesserResultsRequest {
+    uuid: string;
+    limit: number;
+    offset: number;
+}
+
 export interface GetQueryCertificateTransparencyResultsRequest {
     uuid: string;
     limit: number;
@@ -137,6 +149,10 @@ export interface GetWorkspaceAttacksRequest {
 
 export interface HostsAliveCheckRequest {
     hostsAliveRequest: HostsAliveRequest;
+}
+
+export interface PortGuesserOperationRequest {
+    portGuesserRequest: PortGuesserRequest;
 }
 
 export interface QueryCertificateTransparencyOperationRequest {
@@ -466,6 +482,54 @@ export class AttacksApi extends runtime.BaseAPI {
     }
 
     /**
+     * Retrieve a port guesser\'s results by the attack\'s id
+     * Retrieve a port guesser\'s results by the attack\'s id
+     */
+    async getPortGuesserResultsRaw(requestParameters: GetPortGuesserResultsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<PortGuesserResultsPage>> {
+        if (requestParameters.uuid === null || requestParameters.uuid === undefined) {
+            throw new runtime.RequiredError('uuid','Required parameter requestParameters.uuid was null or undefined when calling getPortGuesserResults.');
+        }
+
+        if (requestParameters.limit === null || requestParameters.limit === undefined) {
+            throw new runtime.RequiredError('limit','Required parameter requestParameters.limit was null or undefined when calling getPortGuesserResults.');
+        }
+
+        if (requestParameters.offset === null || requestParameters.offset === undefined) {
+            throw new runtime.RequiredError('offset','Required parameter requestParameters.offset was null or undefined when calling getPortGuesserResults.');
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters.limit !== undefined) {
+            queryParameters['limit'] = requestParameters.limit;
+        }
+
+        if (requestParameters.offset !== undefined) {
+            queryParameters['offset'] = requestParameters.offset;
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        const response = await this.request({
+            path: `/api/v1/attacks/{uuid}/portGuesserResults`.replace(`{${"uuid"}}`, encodeURIComponent(String(requestParameters.uuid))),
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => PortGuesserResultsPageFromJSON(jsonValue));
+    }
+
+    /**
+     * Retrieve a port guesser\'s results by the attack\'s id
+     * Retrieve a port guesser\'s results by the attack\'s id
+     */
+    async getPortGuesserResults(requestParameters: GetPortGuesserResultsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<PortGuesserResultsPage> {
+        const response = await this.getPortGuesserResultsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
      * Retrieve a query certificate transparency\'s results by the attack\'s id
      * Retrieve a query certificate transparency\'s results by the attack\'s id
      */
@@ -721,6 +785,37 @@ export class AttacksApi extends runtime.BaseAPI {
      */
     async hostsAliveCheck(requestParameters: HostsAliveCheckRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<UuidResponse> {
         const response = await this.hostsAliveCheckRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     */
+    async portGuesserRaw(requestParameters: PortGuesserOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<UuidResponse>> {
+        if (requestParameters.portGuesserRequest === null || requestParameters.portGuesserRequest === undefined) {
+            throw new runtime.RequiredError('portGuesserRequest','Required parameter requestParameters.portGuesserRequest was null or undefined when calling portGuesser.');
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        const response = await this.request({
+            path: `/api/v1/attacks/portGuesser`,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: PortGuesserRequestToJSON(requestParameters.portGuesserRequest),
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => UuidResponseFromJSON(jsonValue));
+    }
+
+    /**
+     */
+    async portGuesser(requestParameters: PortGuesserOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<UuidResponse> {
+        const response = await this.portGuesserRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

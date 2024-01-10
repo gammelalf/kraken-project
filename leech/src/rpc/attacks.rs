@@ -22,6 +22,7 @@ use crate::modules::bruteforce_subdomains::{
 use crate::modules::certificate_transparency::{query_ct_api, CertificateTransparencySettings};
 use crate::modules::dns::{dns_resolution, DnsRecordResult, DnsResolutionSettings};
 use crate::modules::host_alive::icmp_scan::{start_icmp_scan, IcmpScanSettings};
+use crate::modules::port_guesser::{port_guesser, PortGuesserSettings};
 use crate::modules::port_scanner::tcp_con::{start_tcp_con_port_scan, TcpPortScannerSettings};
 use crate::modules::service_detection::{detect_service, DetectServiceSettings, Service};
 use crate::rpc::rpc_attacks::req_attack_service_server::ReqAttackService;
@@ -30,9 +31,9 @@ use crate::rpc::rpc_attacks::shared::{Aaaa, Address, CertEntry, DnsRecord, Gener
 use crate::rpc::rpc_attacks::{
     any_attack_response, shared, BruteforceSubdomainRequest, BruteforceSubdomainResponse,
     CertificateTransparencyRequest, CertificateTransparencyResponse, DnsResolutionRequest,
-    DnsResolutionResponse, HostsAliveRequest, HostsAliveResponse, ServiceDetectionRequest,
-    ServiceDetectionResponse, ServiceDetectionResponseType, TcpPortScanRequest,
-    TcpPortScanResponse,
+    DnsResolutionResponse, HostsAliveRequest, HostsAliveResponse, PortGuesserRequest,
+    PortGuesserResponse, ServiceDetectionRequest, ServiceDetectionResponse,
+    ServiceDetectionResponseType, TcpPortScanRequest, TcpPortScanResponse,
 };
 
 /// The Attack service
@@ -349,6 +350,38 @@ impl ReqAttackService for Attacks {
                 }),
             },
             any_attack_response::Response::DnsResolution,
+        )
+    }
+
+    type PortGuesserStream =
+        Pin<Box<dyn Stream<Item = Result<PortGuesserResponse, Status>> + Send>>;
+
+    async fn port_guesser(
+        &self,
+        request: Request<PortGuesserRequest>,
+    ) -> Result<Response<Self::PortGuesserStream>, Status> {
+        let req = request.into_inner();
+
+        let attack_uuid = Uuid::parse_str(&req.attack_uuid)
+            .map_err(|_| Status::invalid_argument("attack_uuid has to be an Uuid"))?;
+
+        let settings = PortGuesserSettings {
+            addresses: req.targets.into_iter().map(|el| el.into()).collect(),
+            num_ports: req.num_ports,
+        };
+
+        self.stream_attack(
+            attack_uuid,
+            |tx| async move {
+                port_guesser(settings, tx)
+                    .await
+                    .map_err(|_| Status::unknown(""))
+            },
+            |value| PortGuesserResponse {
+                host: Some(value.host.into()),
+                port: value.port as u32,
+            },
+            any_attack_response::Response::PortGuesser,
         )
     }
 }
