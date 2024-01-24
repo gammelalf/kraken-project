@@ -8,13 +8,124 @@ use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use futures::{stream, StreamExt};
+use kraken_proto::any_attack_response::Response;
+use kraken_proto::shared::{Aaaa, DnsRecord, GenericRecord, A};
+use kraken_proto::{shared, DnsResolutionRequest, DnsResolutionResponse};
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc::Sender;
+use tonic::Status;
 use trust_dns_resolver::error::{ResolveError, ResolveErrorKind};
 use trust_dns_resolver::proto::rr::{Record, RecordType};
 use trust_dns_resolver::TokioAsyncResolver;
 
 use crate::modules::dns::errors::DnsResolutionError;
+use crate::modules::StreamedAttack;
+
+pub struct DnsResolution;
+#[tonic::async_trait]
+impl StreamedAttack for DnsResolution {
+    type Settings = DnsResolutionSettings;
+    type Output = DnsRecordResult;
+    type Error = DnsResolutionError;
+    async fn execute(
+        settings: Self::Settings,
+        sender: Sender<Self::Output>,
+    ) -> Result<(), Self::Error> {
+        dns_resolution(settings, sender).await
+    }
+
+    type Request = DnsResolutionRequest;
+    fn get_attack_uuid(request: &Self::Request) -> &str {
+        &request.attack_uuid
+    }
+    fn decode_settings(request: Self::Request) -> Result<Self::Settings, Status> {
+        if request.targets.is_empty() {
+            return Err(Status::invalid_argument("nothing to resolve"));
+        }
+        Ok(DnsResolutionSettings {
+            domains: request.targets,
+            concurrent_limit: request.concurrent_limit,
+        })
+    }
+
+    type Response = DnsResolutionResponse;
+    fn encode_output(output: Self::Output) -> Self::Response {
+        DnsResolutionResponse {
+            record: Some(match output {
+                DnsRecordResult::A { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::A(A {
+                        source,
+                        to: Some(shared::Ipv4::from(target)),
+                    })),
+                },
+                DnsRecordResult::Aaaa { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Aaaa(Aaaa {
+                        source,
+                        to: Some(shared::Ipv6::from(target)),
+                    })),
+                },
+                DnsRecordResult::CAA { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Caa(GenericRecord {
+                        source,
+                        to: target,
+                    })),
+                },
+                DnsRecordResult::Cname { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Cname(GenericRecord {
+                        source,
+                        to: target,
+                    })),
+                },
+                DnsRecordResult::Mx { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Mx(GenericRecord {
+                        source,
+                        to: target,
+                    })),
+                },
+                DnsRecordResult::Tlsa { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Tlsa(GenericRecord {
+                        source,
+                        to: target,
+                    })),
+                },
+                DnsRecordResult::Txt { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Txt(GenericRecord {
+                        source,
+                        to: target,
+                    })),
+                },
+            }),
+        }
+    }
+
+    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::DnsResolution;
+
+    fn print_output(output: &Self::Output) {
+        match output {
+            DnsRecordResult::A { source, target } => {
+                info!("Found a record for {source}: {target}");
+            }
+            DnsRecordResult::Aaaa { source, target } => {
+                info!("Found aaaa record for {source}: {target}");
+            }
+            DnsRecordResult::Cname { source, target } => {
+                info!("Found cname record for {source}: {target}");
+            }
+            DnsRecordResult::CAA { source, target } => {
+                info!("Found caa record for {source}: {target}");
+            }
+            DnsRecordResult::Mx { source, target } => {
+                info!("Found mx record for {source}: {target}");
+            }
+            DnsRecordResult::Tlsa { source, target } => {
+                info!("Found tlsa record for {source}: {target}");
+            }
+            DnsRecordResult::Txt { source, target } => {
+                info!("Found txt record for {source}: {target}");
+            }
+        };
+    }
+}
 
 /// Result of a subdomain
 #[derive(Debug, Clone)]
@@ -73,6 +184,7 @@ pub enum DnsRecordResult {
 /// DNS resolution settings
 ///
 /// This will use `/etc/resolv.conf` on Unix OSes and the registry on Windows
+#[derive(Debug)]
 pub struct DnsResolutionSettings {
     /// The domains to resolve
     pub domains: Vec<String>,

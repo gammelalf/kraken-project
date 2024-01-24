@@ -3,19 +3,94 @@ use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use futures::{stream, TryStreamExt};
+use kraken_proto::any_attack_response::Response;
+use kraken_proto::shared::Address;
+use kraken_proto::{ServiceCertainty, UdpServiceDetectionRequest, UdpServiceDetectionResponse};
 use log::{debug, info};
 use probe_config::generated::Match;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, timeout};
+use tonic::Status;
 
 use super::error::UdpServiceScanError;
 use super::Service;
 use crate::modules::service_detection::generated;
+use crate::modules::StreamedAttack;
+
+pub struct UdpServiceDetection;
+#[tonic::async_trait]
+impl StreamedAttack for UdpServiceDetection {
+    type Settings = UdpServiceDetectionSettings;
+    type Output = UdpServiceDetectionResult;
+    type Error = UdpServiceScanError;
+    async fn execute(
+        settings: Self::Settings,
+        sender: Sender<Self::Output>,
+    ) -> Result<(), Self::Error> {
+        start_udp_service_detection(settings, sender).await
+    }
+
+    type Request = UdpServiceDetectionRequest;
+    fn get_attack_uuid(request: &Self::Request) -> &str {
+        &request.attack_uuid
+    }
+    fn decode_settings(request: Self::Request) -> Result<Self::Settings, Status> {
+        let mut ports = request
+            .ports
+            .into_iter()
+            .map(RangeInclusive::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        if ports.is_empty() {
+            ports.push(1..=u16::MAX);
+        }
+
+        Ok(UdpServiceDetectionSettings {
+            ip: IpAddr::try_from(
+                request
+                    .address
+                    .clone()
+                    .ok_or(Status::invalid_argument("Missing address"))?,
+            )?,
+            ports,
+            concurrent_limit: request.concurrent_limit,
+            max_retries: request.max_retries,
+            retry_interval: Duration::from_millis(request.retry_interval),
+            timeout: Duration::from_millis(request.timeout),
+        })
+    }
+
+    type Response = UdpServiceDetectionResponse;
+    fn encode_output(output: Self::Output) -> Self::Response {
+        UdpServiceDetectionResponse {
+            address: Some(Address::from(output.ip)),
+            port: output.port as u32,
+            certainty: match output.service {
+                Service::Unknown => ServiceCertainty::Unknown as _,
+                Service::Maybe(_) => ServiceCertainty::Maybe as _,
+                Service::Definitely(_) => ServiceCertainty::Definitely as _,
+            },
+            services: match output.service {
+                Service::Unknown => Vec::new(),
+                Service::Maybe(services) => services.iter().map(|s| s.to_string()).collect(),
+                Service::Definitely(service) => vec![service.to_string()],
+            },
+        }
+    }
+
+    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::UdpServiceDetection;
+
+    fn print_output(output: &Self::Output) {
+        info!(
+            "detected service on {}:{}: {:?}",
+            output.ip, output.port, output.service
+        );
+    }
+}
 
 /// Settings for a service detection
-#[derive(Clone)]
+#[derive(Debug)]
 pub struct UdpServiceDetectionSettings {
     /// IP address to scan
     pub ip: IpAddr,
@@ -107,6 +182,8 @@ async fn single_probe_udp(
 #[derive(Debug, Clone)]
 /// A found open or detected UDP service on a specific port.
 pub struct UdpServiceDetectionResult {
+    /// The host that was scanned.
+    pub ip: IpAddr,
     /// The port that was found open with the given service.
     pub port: u16,
     /// The service that was found possibly running on this port.
@@ -116,9 +193,11 @@ pub struct UdpServiceDetectionResult {
 /// Detects the UDP service behind a socket by sending it known probes or trying `\r\n\r\n` in case there are no
 /// matching probes.
 pub async fn start_udp_service_detection(
-    settings: &UdpServiceDetectionSettings,
+    settings: UdpServiceDetectionSettings,
     tx: Sender<UdpServiceDetectionResult>,
 ) -> Result<(), UdpServiceScanError> {
+    let settings = &settings;
+    let ip = settings.ip;
     stream::iter(
         settings
             .ports
@@ -143,6 +222,7 @@ pub async fn start_udp_service_detection(
                             Match::Exact => {
                                 debug!("Found exact UDP service {} on port {port}", probe.service);
                                 tx.send(UdpServiceDetectionResult {
+                                    ip,
                                     port,
                                     service: Service::Definitely(probe.service),
                                 })
@@ -159,6 +239,7 @@ pub async fn start_udp_service_detection(
                 if let Some(_data) = settings.probe_udp(port, payload).await? {
                     debug!("Generic CRLF probe on port {port} matched");
                     tx.send(UdpServiceDetectionResult {
+                        ip,
                         port,
                         service: Service::Unknown,
                     })
@@ -167,6 +248,7 @@ pub async fn start_udp_service_detection(
             } else {
                 debug!("Found maybe UDP services {partial_matches:?} on port {port}");
                 tx.send(UdpServiceDetectionResult {
+                    ip,
                     port,
                     service: Service::Maybe(partial_matches),
                 })

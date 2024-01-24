@@ -2,26 +2,217 @@
 
 use std::fmt::Display;
 
+use kraken_proto::any_attack_response::Response;
+use kraken_proto::shared::dns_txt_scan::Info;
+use kraken_proto::shared::{
+    spf_directive, spf_part, DnsTxtKnownEntry, Net, SpfDirective, SpfExplanationModifier, SpfInfo,
+    SpfMechanismA, SpfMechanismAll, SpfMechanismExists, SpfMechanismInclude, SpfMechanismIp,
+    SpfMechanismMx, SpfMechanismPtr, SpfPart, SpfQualifier, SpfRedirectModifier,
+    SpfUnknownModifier,
+};
+use kraken_proto::{shared, DnsTxtScanRequest, DnsTxtScanResponse};
 use log::{debug, info};
 use once_cell::sync::Lazy;
 use regex::bytes::Regex;
-use tokio::{sync::mpsc::Sender, task::JoinSet};
-use trust_dns_resolver::{
-    name_server::{GenericConnector, TokioRuntimeProvider},
-    proto::rr::Record,
-    AsyncResolver, TokioAsyncResolver,
-};
+use tokio::sync::mpsc::Sender;
+use tokio::task::JoinSet;
+use tonic::Status;
+use trust_dns_resolver::name_server::{GenericConnector, TokioRuntimeProvider};
+use trust_dns_resolver::proto::rr::Record;
+use trust_dns_resolver::{AsyncResolver, TokioAsyncResolver};
 
 use crate::modules::dns::resolve;
+use crate::modules::StreamedAttack;
 
 type ResolverT = AsyncResolver<GenericConnector<TokioRuntimeProvider>>;
 
-use super::{
-    errors::DnsResolutionError,
-    spf::{parse_spf, SPFPart},
-};
+use super::errors::DnsResolutionError;
+use super::spf::{parse_spf, SPFMechanism, SPFPart, SPFQualifier};
+
+pub struct DnsTxtScan;
+#[tonic::async_trait]
+impl StreamedAttack for DnsTxtScan {
+    type Settings = DnsTxtScanSettings;
+    type Output = DnsTxtScanResult;
+    type Error = DnsResolutionError;
+    async fn execute(
+        settings: Self::Settings,
+        sender: Sender<Self::Output>,
+    ) -> Result<(), Self::Error> {
+        start_dns_txt_scan(settings, sender).await
+    }
+
+    type Request = DnsTxtScanRequest;
+    fn get_attack_uuid(request: &Self::Request) -> &str {
+        &request.attack_uuid
+    }
+    fn decode_settings(request: Self::Request) -> Result<Self::Settings, Status> {
+        if request.targets.is_empty() {
+            return Err(Status::invalid_argument("nothing to resolve"));
+        }
+
+        Ok(DnsTxtScanSettings {
+            domains: request.targets,
+        })
+    }
+
+    type Response = DnsTxtScanResponse;
+    fn encode_output(output: Self::Output) -> Self::Response {
+        DnsTxtScanResponse {
+            record: Some(shared::DnsTxtScan {
+                domain: output.domain,
+                rule: output.rule,
+                info: Some(match output.info {
+                    TxtScanInfo::HasGoogleAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasGoogleAccount as _)
+                    }
+                    TxtScanInfo::HasDocusignAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasDocusignAccount as _)
+                    }
+                    TxtScanInfo::HasAppleAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasAppleAccount as _)
+                    }
+                    TxtScanInfo::HasFacebookAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasFacebookAccount as _)
+                    }
+                    TxtScanInfo::HasHubspotAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasHubspotAccount as _)
+                    }
+                    TxtScanInfo::HasMsDynamics365 => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasMsDynamics365 as _)
+                    }
+                    TxtScanInfo::HasStripeAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasStripeAccount as _)
+                    }
+                    TxtScanInfo::HasOneTrustSso => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasOneTrustSso as _)
+                    }
+                    TxtScanInfo::HasBrevoAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasBrevoAccount as _)
+                    }
+                    TxtScanInfo::HasGlobalsignAccount => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasGlobalsignAccount as _)
+                    }
+                    TxtScanInfo::HasGlobalsignSMime => {
+                        Info::WellKnown(DnsTxtKnownEntry::HasGlobalsignSMime as _)
+                    }
+                    TxtScanInfo::OwnsAtlassianAccounts => {
+                        Info::WellKnown(DnsTxtKnownEntry::OwnsAtlassianAccounts as _)
+                    }
+                    TxtScanInfo::OwnsZoomAccounts => {
+                        Info::WellKnown(DnsTxtKnownEntry::OwnsZoomAccounts as _)
+                    }
+                    TxtScanInfo::EmailProtonMail => {
+                        Info::WellKnown(DnsTxtKnownEntry::EmailProtonMail as _)
+                    }
+                    TxtScanInfo::SPF { parts } => Info::Spf(SpfInfo {
+                        parts: parts
+                            .iter()
+                            .map(|part| SpfPart {
+                                rule: part.encode_spf(),
+                                part: Some(match part {
+                                    SPFPart::Directive {
+                                        qualifier,
+                                        mechanism,
+                                    } => spf_part::Part::Directive(SpfDirective {
+                                        mechanism: Some(match mechanism {
+                                            SPFMechanism::All => {
+                                                spf_directive::Mechanism::All(SpfMechanismAll {})
+                                            }
+                                            SPFMechanism::Include { domain } => {
+                                                spf_directive::Mechanism::Include(
+                                                    SpfMechanismInclude {
+                                                        domain: domain.clone(),
+                                                    },
+                                                )
+                                            }
+                                            SPFMechanism::A {
+                                                domain,
+                                                ipv4_cidr,
+                                                ipv6_cidr,
+                                            } => spf_directive::Mechanism::A(SpfMechanismA {
+                                                domain: domain.clone(),
+                                                ipv4_cidr: ipv4_cidr.map(|a| a as _),
+                                                ipv6_cidr: ipv6_cidr.map(|a| a as _),
+                                            }),
+                                            SPFMechanism::MX {
+                                                domain,
+                                                ipv4_cidr,
+                                                ipv6_cidr,
+                                            } => spf_directive::Mechanism::Mx(SpfMechanismMx {
+                                                domain: domain.clone(),
+                                                ipv4_cidr: ipv4_cidr.map(|a| a as _),
+                                                ipv6_cidr: ipv6_cidr.map(|a| a as _),
+                                            }),
+                                            SPFMechanism::PTR { domain } => {
+                                                spf_directive::Mechanism::Ptr(SpfMechanismPtr {
+                                                    domain: domain.clone(),
+                                                })
+                                            }
+                                            SPFMechanism::IP { ipnet } => {
+                                                spf_directive::Mechanism::Ip(SpfMechanismIp {
+                                                    ip: Some(Net::from(*ipnet)),
+                                                })
+                                            }
+                                            SPFMechanism::Exists { domain } => {
+                                                spf_directive::Mechanism::Exists(
+                                                    SpfMechanismExists {
+                                                        domain: domain.clone(),
+                                                    },
+                                                )
+                                            }
+                                        }),
+                                        qualifier: match qualifier {
+                                            SPFQualifier::Pass => SpfQualifier::Pass as _,
+                                            SPFQualifier::Fail => SpfQualifier::Fail as _,
+                                            SPFQualifier::SoftFail => SpfQualifier::SoftFail as _,
+                                            SPFQualifier::Neutral => SpfQualifier::Neutral as _,
+                                        },
+                                    }),
+                                    SPFPart::RedirectModifier { domain } => {
+                                        spf_part::Part::Redirect(SpfRedirectModifier {
+                                            domain: domain.clone(),
+                                        })
+                                    }
+                                    SPFPart::ExplanationModifier { domain } => {
+                                        spf_part::Part::Explanation(SpfExplanationModifier {
+                                            domain: domain.clone(),
+                                        })
+                                    }
+                                    SPFPart::UnknownModifier { name, value } => {
+                                        spf_part::Part::UnknownModifier(SpfUnknownModifier {
+                                            name: name.clone(),
+                                            value: value.clone(),
+                                        })
+                                    }
+                                }),
+                            })
+                            .collect(),
+                    }),
+                }),
+            }),
+        }
+    }
+
+    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::DnsTxtScan;
+
+    fn print_output(output: &Self::Output) {
+        match &output.info {
+            TxtScanInfo::SPF { parts } => {
+                info!("Found SPF entry for {}:", output.domain);
+                for part in parts {
+                    info!("  {part}");
+                }
+            }
+            _ => {
+                info!("Found txt entry for {}: {}", output.domain, output.info);
+            }
+        };
+    }
+}
 
 /// DNS TXT scanning settings
+#[derive(Debug)]
 pub struct DnsTxtScanSettings {
     /// The domains to start resolving TXT settings in
     pub domains: Vec<String>,

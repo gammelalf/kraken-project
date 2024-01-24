@@ -1,14 +1,82 @@
 //! This module implements detecting a service behind a port
 
+use std::error::Error;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
+use kraken_proto::shared::Address;
+use kraken_proto::{ServiceCertainty, ServiceDetectionRequest, ServiceDetectionResponse};
 use log::{debug, info, trace, warn};
 use probe_config::generated::Match;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::sleep;
+use tonic::Status;
+
+use crate::modules::Attack;
+
+pub struct ServiceDetection;
+#[tonic::async_trait]
+impl Attack for ServiceDetection {
+    type Settings = DetectServiceSettings;
+    type Output = (SocketAddr, Service);
+    // thanks std
+    // Arc<dyn Error> does implement Error while Box<dyn Error> doesn't
+    type Error = Arc<dyn Error + Send + Sync + 'static>;
+    async fn execute(settings: Self::Settings) -> Result<Self::Output, Self::Error> {
+        Ok((settings.socket, detect_service(settings).await?))
+    }
+
+    type Request = ServiceDetectionRequest;
+    fn decode_settings(request: Self::Request) -> Result<Self::Settings, Status> {
+        Ok(DetectServiceSettings {
+            socket: SocketAddr::new(
+                IpAddr::try_from(
+                    request
+                        .address
+                        .clone()
+                        .ok_or(Status::invalid_argument("Missing address"))?,
+                )?,
+                request
+                    .port
+                    .try_into()
+                    .map_err(|_| Status::invalid_argument("Port is out of range"))?,
+            ),
+            timeout: Duration::from_millis(request.timeout),
+            always_run_everything: false,
+        })
+    }
+
+    type Response = ServiceDetectionResponse;
+    fn encode_output((socket, service): Self::Output) -> Self::Response {
+        match service {
+            Service::Unknown => ServiceDetectionResponse {
+                response_type: ServiceCertainty::Unknown as _,
+                services: Vec::new(),
+                address: Some(Address::from(socket.ip())),
+                port: socket.port() as u32,
+            },
+            Service::Maybe(services) => ServiceDetectionResponse {
+                response_type: ServiceCertainty::Maybe as _,
+                services: services.iter().map(|s| s.to_string()).collect(),
+                address: Some(Address::from(socket.ip())),
+                port: socket.port() as u32,
+            },
+            Service::Definitely(service) => ServiceDetectionResponse {
+                response_type: ServiceCertainty::Definitely as _,
+                services: vec![service.to_string()],
+                address: Some(Address::from(socket.ip())),
+                port: socket.port() as u32,
+            },
+        }
+    }
+
+    fn print_output(output: &Self::Output) {
+        info!("{output:?}");
+    }
+}
 
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/generated_probes.rs"));
@@ -21,10 +89,11 @@ pub mod udp;
 
 use self::error::{Extended, ResultExt};
 
-type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
+type DynError = Box<dyn Error + Send + Sync + 'static>;
 type DynResult<T> = Result<T, DynError>;
 
 /// Settings for a service detection
+#[derive(Debug)]
 pub struct DetectServiceSettings {
     /// Socket to scan
     pub socket: SocketAddr,

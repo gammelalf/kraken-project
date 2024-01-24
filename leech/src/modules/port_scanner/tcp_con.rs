@@ -7,6 +7,9 @@ use std::time::Duration;
 use futures::{stream, StreamExt};
 use ipnetwork::IpNetwork;
 use itertools::Itertools;
+use kraken_proto::any_attack_response::Response;
+use kraken_proto::shared::Address;
+use kraken_proto::{TcpPortScanRequest, TcpPortScanResponse};
 use log::{debug, info, trace, warn};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -14,9 +17,68 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time::{sleep, timeout};
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::Status;
 
-use crate::modules::host_alive::icmp_scan::{start_icmp_scan, IcmpScanSettings};
+use crate::modules::host_alive::icmp_scan::{IcmpScan, IcmpScanSettings};
 use crate::modules::port_scanner::error::TcpPortScanError;
+use crate::modules::StreamedAttack;
+
+pub struct TcpPortScanner;
+#[tonic::async_trait]
+impl StreamedAttack for TcpPortScanner {
+    type Settings = TcpPortScannerSettings;
+    type Output = SocketAddr;
+    type Error = TcpPortScanError;
+    async fn execute(
+        settings: Self::Settings,
+        sender: Sender<Self::Output>,
+    ) -> Result<(), Self::Error> {
+        start_tcp_con_port_scan(settings, sender).await
+    }
+
+    type Request = TcpPortScanRequest;
+    fn get_attack_uuid(request: &Self::Request) -> &str {
+        &request.attack_uuid
+    }
+    fn decode_settings(request: Self::Request) -> Result<Self::Settings, Status> {
+        let mut ports = request
+            .ports
+            .into_iter()
+            .map(RangeInclusive::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        if ports.is_empty() {
+            ports.push(1..=u16::MAX);
+        }
+
+        Ok(TcpPortScannerSettings {
+            addresses: request
+                .targets
+                .into_iter()
+                .map(IpNetwork::try_from)
+                .collect::<Result<_, _>>()?,
+            ports,
+            timeout: Duration::from_millis(request.timeout),
+            max_retries: request.max_retries,
+            retry_interval: Duration::from_millis(request.retry_interval),
+            concurrent_limit: request.concurrent_limit,
+            skip_icmp_check: request.skip_icmp_check,
+        })
+    }
+
+    type Response = TcpPortScanResponse;
+    fn encode_output(output: Self::Output) -> Self::Response {
+        TcpPortScanResponse {
+            address: Some(Address::from(output.ip())),
+            port: output.port() as u32,
+        }
+    }
+
+    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::TcpPortScan;
+
+    fn print_output(output: &Self::Output) {
+        info!("Open port found: {output}");
+    }
+}
 
 /// The settings of a tcp connection port scan
 #[derive(Clone, Debug)]
@@ -67,7 +129,7 @@ pub async fn start_tcp_con_port_scan(
             timeout: Duration::from_millis(1000),
             concurrent_limit: settings.concurrent_limit,
         };
-        let icmp_scan = tokio::spawn(start_icmp_scan(icmp_settings, tx));
+        let icmp_scan = tokio::spawn(IcmpScan::execute(icmp_settings, tx));
         let addresses = ReceiverStream::new(rx).map(IpNetwork::from).collect().await;
         icmp_scan.await.map_err(TcpPortScanError::TaskJoin)??;
         addresses

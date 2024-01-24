@@ -10,12 +10,17 @@ use std::time::Duration;
 use std::{fs, panic};
 
 use itertools::Itertools;
+use kraken_proto::any_attack_response::Response;
+use kraken_proto::shared::{Aaaa, DnsRecord, GenericRecord};
+use kraken_proto::{shared, BruteforceSubdomainRequest, BruteforceSubdomainResponse};
 use log::{debug, error, info, trace, warn};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::thread_rng;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 use tokio::time::sleep;
+use tonic::Status;
 use trust_dns_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
 use trust_dns_resolver::error::{ResolveError, ResolveErrorKind};
 use trust_dns_resolver::proto::rr::rdata::{A, AAAA, CNAME};
@@ -23,6 +28,75 @@ use trust_dns_resolver::proto::rr::{RData, Record, RecordType};
 use trust_dns_resolver::TokioAsyncResolver;
 
 use crate::modules::bruteforce_subdomains::error::BruteforceSubdomainError;
+use crate::modules::StreamedAttack;
+
+pub struct BruteforceSubdomain;
+#[tonic::async_trait]
+impl StreamedAttack for BruteforceSubdomain {
+    type Settings = BruteforceSubdomainsSettings;
+    type Output = BruteforceSubdomainResult;
+    type Error = BruteforceSubdomainError;
+    async fn execute(
+        settings: Self::Settings,
+        sender: Sender<Self::Output>,
+    ) -> Result<(), Self::Error> {
+        bruteforce_subdomains(settings, sender).await
+    }
+
+    type Request = BruteforceSubdomainRequest;
+    fn get_attack_uuid(request: &Self::Request) -> &str {
+        &request.attack_uuid
+    }
+    fn decode_settings(request: Self::Request) -> Result<Self::Settings, Status> {
+        Ok(BruteforceSubdomainsSettings {
+            domain: request.domain,
+            wordlist_path: request.wordlist_path.parse().unwrap(),
+            concurrent_limit: request.concurrent_limit,
+        })
+    }
+
+    type Response = BruteforceSubdomainResponse;
+    fn encode_output(output: Self::Output) -> Self::Response {
+        BruteforceSubdomainResponse {
+            record: Some(match output {
+                BruteforceSubdomainResult::A { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::A(shared::A {
+                        source,
+                        to: Some(shared::Ipv4::from(target)),
+                    })),
+                },
+                BruteforceSubdomainResult::Aaaa { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Aaaa(Aaaa {
+                        source,
+                        to: Some(shared::Ipv6::from(target)),
+                    })),
+                },
+                BruteforceSubdomainResult::Cname { source, target } => DnsRecord {
+                    record: Some(shared::dns_record::Record::Cname(GenericRecord {
+                        source,
+                        to: target,
+                    })),
+                },
+            }),
+        }
+    }
+
+    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::BruteforceSubdomain;
+
+    fn print_output(output: &Self::Output) {
+        match output {
+            BruteforceSubdomainResult::A { source, target } => {
+                info!("Found a record for {source}: {target}");
+            }
+            BruteforceSubdomainResult::Aaaa { source, target } => {
+                info!("Found aaaa record for {source}: {target}");
+            }
+            BruteforceSubdomainResult::Cname { source, target } => {
+                info!("Found cname record for {source}: {target}");
+            }
+        };
+    }
+}
 
 pub mod error;
 

@@ -40,15 +40,16 @@ use uuid::Uuid;
 
 use crate::backlog::start_backlog;
 use crate::config::{get_config, Config};
-use crate::modules::bruteforce_subdomains::{
-    bruteforce_subdomains, BruteforceSubdomainResult, BruteforceSubdomainsSettings,
+use crate::modules::bruteforce_subdomains::{BruteforceSubdomain, BruteforceSubdomainsSettings};
+use crate::modules::certificate_transparency::{
+    query_ct_api, CertificateTransparency, CertificateTransparencySettings,
 };
-use crate::modules::certificate_transparency::{query_ct_api, CertificateTransparencySettings};
-use crate::modules::dns::txt::{start_dns_txt_scan, DnsTxtScanSettings};
-use crate::modules::host_alive::icmp_scan::{start_icmp_scan, IcmpScanSettings};
-use crate::modules::port_scanner::tcp_con::{start_tcp_con_port_scan, TcpPortScannerSettings};
-use crate::modules::service_detection::DetectServiceSettings;
-use crate::modules::{dehashed, service_detection, whois};
+use crate::modules::dns::txt::{DnsTxtScan, DnsTxtScanSettings};
+use crate::modules::host_alive::icmp_scan::{IcmpScan, IcmpScanSettings};
+use crate::modules::port_scanner::tcp_con::{TcpPortScanner, TcpPortScannerSettings};
+use crate::modules::service_detection::udp::{UdpServiceDetection, UdpServiceDetectionSettings};
+use crate::modules::service_detection::{DetectServiceSettings, ServiceDetection};
+use crate::modules::{dehashed, whois, Attack, StreamedAttack};
 use crate::rpc::start_rpc_server;
 use crate::utils::{input, kraken_endpoint};
 
@@ -400,58 +401,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         wordlist_path,
                         concurrent_limit,
                     } => {
-                        let (tx, mut rx) = mpsc::channel(128);
-
-                        let join_handle = task::spawn(bruteforce_subdomains(
-                            BruteforceSubdomainsSettings {
-                                domain: target.to_string(),
-                                wordlist_path,
-                                concurrent_limit: u32::from(concurrent_limit),
-                            },
-                            tx,
-                        ));
-
-                        while let Some(res) = rx.recv().await {
-                            match res {
-                                BruteforceSubdomainResult::A { source, target } => {
-                                    info!("Found a record for {source}: {target}");
-                                }
-                                BruteforceSubdomainResult::Aaaa { source, target } => {
-                                    info!("Found aaaa record for {source}: {target}");
-                                }
-                                BruteforceSubdomainResult::Cname { source, target } => {
-                                    info!("Found cname record for {source}: {target}");
-                                }
-                            };
-                        }
-
-                        join_handle.await??;
+                        run_streamed_attack::<BruteforceSubdomain>(BruteforceSubdomainsSettings {
+                            domain: target.to_string(),
+                            wordlist_path,
+                            concurrent_limit: u32::from(concurrent_limit),
+                        })
+                        .await?;
                     }
                     RunCommand::DnsTxt { target } => {
-                        let (tx, mut rx) = mpsc::channel(128);
-
-                        let join_handle = task::spawn(start_dns_txt_scan(
-                            DnsTxtScanSettings {
-                                domains: Vec::from([target.to_string()]),
-                            },
-                            tx,
-                        ));
-
-                        while let Some(res) = rx.recv().await {
-                            match res.info {
-                                modules::dns::txt::TxtScanInfo::SPF { parts } => {
-                                    info!("Found SPF entry for {}:", res.domain);
-                                    for part in parts {
-                                        info!("  {part}");
-                                    }
-                                }
-                                _ => {
-                                    info!("Found txt entry for {}: {}", res.domain, res.info);
-                                }
-                            };
-                        }
-
-                        join_handle.await??;
+                        run_streamed_attack::<DnsTxtScan>(DnsTxtScanSettings {
+                            domains: Vec::from([target.to_string()]),
+                        })
+                        .await?;
                     }
                     RunCommand::CertificateTransparency {
                         target,
@@ -459,25 +420,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         max_retries,
                         retry_interval,
                     } => {
-                        let ct = CertificateTransparencySettings {
-                            target,
-                            include_expired,
-                            max_retries,
-                            retry_interval: Duration::from_millis(retry_interval as u64),
-                        };
-
-                        let entries = query_ct_api(ct).await?;
-                        for x in entries
-                            .into_iter()
-                            .flat_map(|mut e| {
-                                e.name_value.push(e.common_name);
-                                e.name_value
-                            })
-                            .sorted()
-                            .dedup()
-                        {
-                            info!("{x}");
-                        }
+                        run_normal_attack::<CertificateTransparency>(
+                            CertificateTransparencySettings {
+                                target,
+                                include_expired,
+                                max_retries,
+                                retry_interval: Duration::from_millis(retry_interval as u64),
+                            },
+                        )
+                        .await?;
                     }
                     RunCommand::PortScanner {
                         targets,
@@ -503,7 +454,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         match technique {
                             PortScanTechnique::TcpCon => {
-                                let settings = TcpPortScannerSettings {
+                                run_streamed_attack::<TcpPortScanner>(TcpPortScannerSettings {
                                     addresses,
                                     ports: port_range,
                                     timeout: Duration::from_millis(timeout as u64),
@@ -511,37 +462,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     max_retries,
                                     retry_interval: Duration::from_millis(retry_interval as u64),
                                     concurrent_limit: u32::from(concurrent_limit),
-                                };
-
-                                let (tx, mut rx) = mpsc::channel(1);
-
-                                task::spawn(async move {
-                                    while let Some(addr) = rx.recv().await {
-                                        info!("Open port found: {addr}");
-                                    }
-                                });
-
-                                if let Err(err) = start_tcp_con_port_scan(settings, tx).await {
-                                    error!("{err}");
-                                }
+                                })
+                                .await?;
                             }
                             PortScanTechnique::Icmp => {
-                                let settings = IcmpScanSettings {
+                                run_streamed_attack::<IcmpScan>(IcmpScanSettings {
                                     addresses,
                                     timeout: Duration::from_millis(timeout as u64),
                                     concurrent_limit: u32::from(concurrent_limit),
-                                };
-                                let (tx, mut rx) = mpsc::channel(1);
-
-                                task::spawn(async move {
-                                    while let Some(addr) = rx.recv().await {
-                                        info!("Host up: {addr}");
-                                    }
-                                });
-
-                                if let Err(err) = start_icmp_scan(settings, tx).await {
-                                    error!("{err}");
-                                }
+                                })
+                                .await?;
                             }
                         }
                     }
@@ -587,13 +517,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         timeout: wait_for_response,
                         dont_stop_on_match: debug,
                     } => {
-                        let result = service_detection::detect_service(DetectServiceSettings {
+                        run_normal_attack::<ServiceDetection>(DetectServiceSettings {
                             socket: SocketAddr::new(addr, port),
                             timeout: Duration::from_millis(wait_for_response),
                             always_run_everything: debug,
                         })
-                        .await;
-                        println!("{result:?}");
+                        .await?;
                     }
                     RunCommand::ServiceDetectionUdp {
                         addr,
@@ -610,30 +539,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             utils::parse_ports(&ports, &mut port_range)?;
                         }
 
-                        let (tx, mut rx) =
-                            mpsc::channel::<service_detection::udp::UdpServiceDetectionResult>(1);
-
-                        task::spawn(async move {
-                            while let Some(result) = rx.recv().await {
-                                info!("detected service on {}: {:?}", result.port, result.service);
-                            }
-                        });
-
-                        if let Err(err) = service_detection::udp::start_udp_service_detection(
-                            &service_detection::udp::UdpServiceDetectionSettings {
-                                ip: addr,
-                                ports: port_range,
-                                max_retries: port_retries,
-                                retry_interval: Duration::from_millis(retry_interval),
-                                timeout: Duration::from_millis(timeout),
-                                concurrent_limit: u32::from(concurrent_limit),
-                            },
-                            tx,
-                        )
-                        .await
-                        {
-                            error!("{err}");
-                        }
+                        run_streamed_attack::<UdpServiceDetection>(UdpServiceDetectionSettings {
+                            ip: addr,
+                            ports: port_range,
+                            max_retries: port_retries,
+                            retry_interval: Duration::from_millis(retry_interval),
+                            timeout: Duration::from_millis(timeout),
+                            concurrent_limit: u32::from(concurrent_limit),
+                        })
+                        .await?;
                     }
                 }
             }
@@ -684,4 +598,22 @@ async fn get_db(config: &Config) -> Result<Database, String> {
     Database::connect(db_config)
         .await
         .map_err(|e| format!("Error connecting to the database: {e}"))
+}
+
+async fn run_normal_attack<A: Attack>(settings: A::Settings) -> Result<(), A::Error> {
+    let output = A::execute(settings).await?;
+    A::print_output(&output);
+    Ok(())
+}
+
+async fn run_streamed_attack<A: StreamedAttack>(settings: A::Settings) -> Result<(), A::Error> {
+    let (tx, mut rx) = mpsc::channel::<A::Output>(1);
+
+    task::spawn(async move {
+        while let Some(output) = rx.recv().await {
+            A::print_output(&output);
+        }
+    });
+
+    A::execute(settings, tx).await
 }

@@ -5,12 +5,64 @@ use std::time::Duration;
 
 use futures::{stream, StreamExt};
 use ipnetwork::IpNetwork;
+use kraken_proto::any_attack_response::Response;
+use kraken_proto::shared::Address;
+use kraken_proto::{HostsAliveRequest, HostsAliveResponse};
 use log::{debug, error, info, trace, warn};
 use rand::random;
 use surge_ping::{Client, PingIdentifier, PingSequence, SurgeError, ICMP};
 use tokio::sync::mpsc::Sender;
+use tonic::Status;
 
 use crate::modules::host_alive::error::IcmpScanError;
+use crate::modules::StreamedAttack;
+
+pub struct IcmpScan;
+#[tonic::async_trait]
+impl StreamedAttack for IcmpScan {
+    type Settings = IcmpScanSettings;
+    type Output = IpAddr;
+    type Error = IcmpScanError;
+    async fn execute(
+        settings: Self::Settings,
+        sender: Sender<Self::Output>,
+    ) -> Result<(), Self::Error> {
+        start_icmp_scan(settings, sender).await
+    }
+
+    type Request = HostsAliveRequest;
+    fn get_attack_uuid(request: &Self::Request) -> &str {
+        &request.attack_uuid
+    }
+    fn decode_settings(request: Self::Request) -> Result<Self::Settings, Status> {
+        if request.targets.is_empty() {
+            return Err(Status::invalid_argument("no hosts to check"));
+        }
+
+        Ok(IcmpScanSettings {
+            concurrent_limit: request.concurrent_limit,
+            timeout: Duration::from_millis(request.timeout),
+            addresses: request
+                .targets
+                .into_iter()
+                .map(IpNetwork::try_from)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    type Response = HostsAliveResponse;
+    fn encode_output(output: Self::Output) -> Self::Response {
+        HostsAliveResponse {
+            host: Some(Address::from(output)),
+        }
+    }
+
+    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::HostsAlive;
+
+    fn print_output(output: &Self::Output) {
+        info!("Host up: {output}");
+    }
+}
 
 /// The settings of a icmp scan
 #[derive(Debug)]
