@@ -10,9 +10,11 @@ use std::time::Duration;
 use std::{fs, panic};
 
 use itertools::Itertools;
-use kraken_proto::any_attack_response::Response;
 use kraken_proto::shared::{Aaaa, DnsRecord, GenericRecord};
-use kraken_proto::{shared, BruteforceSubdomainRequest, BruteforceSubdomainResponse};
+use kraken_proto::{
+    any_attack_response, push_attack_request, shared, BruteforceSubdomainRequest,
+    BruteforceSubdomainResponse, RepeatedBruteforceSubdomainResponse,
+};
 use log::{debug, error, info, trace, warn};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::thread_rng;
@@ -81,8 +83,6 @@ impl StreamedAttack for BruteforceSubdomain {
         }
     }
 
-    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::BruteforceSubdomain;
-
     fn print_output(output: &Self::Output) {
         match output {
             BruteforceSubdomainResult::A { source, target } => {
@@ -95,6 +95,16 @@ impl StreamedAttack for BruteforceSubdomain {
                 info!("Found cname record for {source}: {target}");
             }
         };
+    }
+
+    fn wrap_for_backlog(response: Self::Response) -> any_attack_response::Response {
+        any_attack_response::Response::BruteforceSubdomain(response)
+    }
+
+    fn wrap_for_push(responses: Vec<Self::Response>) -> push_attack_request::Response {
+        push_attack_request::Response::BruteforceSubdomain(RepeatedBruteforceSubdomainResponse {
+            responses,
+        })
     }
 }
 

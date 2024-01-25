@@ -8,9 +8,11 @@ use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use futures::{stream, StreamExt};
-use kraken_proto::any_attack_response::Response;
 use kraken_proto::shared::{Aaaa, DnsRecord, GenericRecord, A};
-use kraken_proto::{shared, DnsResolutionRequest, DnsResolutionResponse};
+use kraken_proto::{
+    any_attack_response, push_attack_request, shared, DnsResolutionRequest, DnsResolutionResponse,
+    RepeatedDnsResolutionResponse,
+};
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc::Sender;
 use tonic::Status;
@@ -98,8 +100,6 @@ impl StreamedAttack for DnsResolution {
         }
     }
 
-    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::DnsResolution;
-
     fn print_output(output: &Self::Output) {
         match output {
             DnsRecordResult::A { source, target } => {
@@ -124,6 +124,14 @@ impl StreamedAttack for DnsResolution {
                 info!("Found txt record for {source}: {target}");
             }
         };
+    }
+
+    fn wrap_for_backlog(response: Self::Response) -> any_attack_response::Response {
+        any_attack_response::Response::DnsResolution(response)
+    }
+
+    fn wrap_for_push(responses: Vec<Self::Response>) -> push_attack_request::Response {
+        push_attack_request::Response::DnsResolution(RepeatedDnsResolutionResponse { responses })
     }
 }
 

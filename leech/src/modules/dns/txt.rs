@@ -2,7 +2,6 @@
 
 use std::fmt::Display;
 
-use kraken_proto::any_attack_response::Response;
 use kraken_proto::shared::dns_txt_scan::Info;
 use kraken_proto::shared::{
     spf_directive, spf_part, DnsTxtKnownEntry, Net, SpfDirective, SpfExplanationModifier, SpfInfo,
@@ -10,7 +9,10 @@ use kraken_proto::shared::{
     SpfMechanismMx, SpfMechanismPtr, SpfPart, SpfQualifier, SpfRedirectModifier,
     SpfUnknownModifier,
 };
-use kraken_proto::{shared, DnsTxtScanRequest, DnsTxtScanResponse};
+use kraken_proto::{
+    any_attack_response, push_attack_request, shared, DnsTxtScanRequest, DnsTxtScanResponse,
+    RepeatedDnsTxtScanResponse,
+};
 use log::{debug, info};
 use once_cell::sync::Lazy;
 use regex::bytes::Regex;
@@ -194,8 +196,6 @@ impl StreamedAttack for DnsTxtScan {
         }
     }
 
-    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::DnsTxtScan;
-
     fn print_output(output: &Self::Output) {
         match &output.info {
             TxtScanInfo::SPF { parts } => {
@@ -208,6 +208,13 @@ impl StreamedAttack for DnsTxtScan {
                 info!("Found txt entry for {}: {}", output.domain, output.info);
             }
         };
+    }
+
+    fn wrap_for_backlog(response: Self::Response) -> any_attack_response::Response {
+        any_attack_response::Response::DnsTxtScan(response)
+    }
+    fn wrap_for_push(responses: Vec<Self::Response>) -> push_attack_request::Response {
+        push_attack_request::Response::DnsTxtScan(RepeatedDnsTxtScanResponse { responses })
     }
 }
 

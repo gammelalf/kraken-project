@@ -5,7 +5,10 @@ use std::time::Duration;
 use futures::{stream, TryStreamExt};
 use kraken_proto::any_attack_response::Response;
 use kraken_proto::shared::Address;
-use kraken_proto::{ServiceCertainty, UdpServiceDetectionRequest, UdpServiceDetectionResponse};
+use kraken_proto::{
+    any_attack_response, push_attack_request, RepeatedUdpServiceDetectionResponse,
+    ServiceCertainty, UdpServiceDetectionRequest, UdpServiceDetectionResponse,
+};
 use log::{debug, info};
 use probe_config::generated::Match;
 use tokio::net::UdpSocket;
@@ -79,13 +82,21 @@ impl StreamedAttack for UdpServiceDetection {
         }
     }
 
-    const BACKLOG_WRAPPER: fn(Self::Response) -> Response = Response::UdpServiceDetection;
-
     fn print_output(output: &Self::Output) {
         info!(
             "detected service on {}:{}: {:?}",
             output.ip, output.port, output.service
         );
+    }
+
+    fn wrap_for_backlog(response: Self::Response) -> Response {
+        any_attack_response::Response::UdpServiceDetection(response)
+    }
+
+    fn wrap_for_push(responses: Vec<Self::Response>) -> push_attack_request::Response {
+        push_attack_request::Response::UdpServiceDetection(RepeatedUdpServiceDetectionResponse {
+            responses,
+        })
     }
 }
 

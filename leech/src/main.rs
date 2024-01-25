@@ -13,28 +13,28 @@
     allow(dead_code, unused_variables, unused_imports)
 )]
 
-use std::env;
 use std::error::Error;
-use std::io::Write;
+use std::fmt::Debug;
+use std::io::{stdin, stdout, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::ops::ControlFlow;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::str::FromStr;
 use std::time::Duration;
+use std::{env, io};
 
-use chrono::{Datelike, Timelike};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use dehashed_rs::SearchType;
 use ipnetwork::IpNetwork;
-use itertools::Itertools;
 use kraken_proto::push_attack_service_client::PushAttackServiceClient;
-use kraken_proto::shared::CertEntry;
-use kraken_proto::{push_attack_request, CertificateTransparencyResponse, PushAttackRequest};
+use kraken_proto::PushAttackRequest;
 use log::{error, info, warn};
-use prost_types::Timestamp;
 use rorm::{cli, Database, DatabaseConfiguration, DatabaseDriver};
 use tokio::sync::mpsc;
 use tokio::task;
+use tonic::transport::Endpoint;
 use trust_dns_resolver::Name;
 use uuid::Uuid;
 
@@ -42,7 +42,7 @@ use crate::backlog::start_backlog;
 use crate::config::{get_config, Config};
 use crate::modules::bruteforce_subdomains::{BruteforceSubdomain, BruteforceSubdomainsSettings};
 use crate::modules::certificate_transparency::{
-    query_ct_api, CertificateTransparency, CertificateTransparencySettings,
+    CertificateTransparency, CertificateTransparencySettings,
 };
 use crate::modules::dns::txt::{DnsTxtScan, DnsTxtScanSettings};
 use crate::modules::host_alive::icmp_scan::{IcmpScan, IcmpScanSettings};
@@ -294,8 +294,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             env_logger::init();
 
-            if let Some(workspace) = push {
+            let push = if let Some(workspace) = push {
                 let config = get_config(&cli.config_path)?;
+                let endpoint = kraken_endpoint(&config.kraken)?;
 
                 let api_key = if let Some(api_key) = api_key {
                     api_key
@@ -306,155 +307,79 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .await?
                         .ok_or_else(|| "Can't push to kraken without api key".to_string())?
                 };
+                Some((endpoint, workspace, api_key))
+            } else {
+                None
+            };
 
-                match command {
-                    RunCommand::CertificateTransparency {
-                        target,
-                        include_expired,
-                        max_retries,
-                        retry_interval,
-                    } => {
-                        let ct = CertificateTransparencySettings {
+            match command {
+                RunCommand::BruteforceSubdomains {
+                    target,
+                    wordlist_path,
+                    concurrent_limit,
+                } => {
+                    run_streamed_attack::<BruteforceSubdomain>(
+                        BruteforceSubdomainsSettings {
+                            domain: target.to_string(),
+                            wordlist_path,
+                            concurrent_limit: u32::from(concurrent_limit),
+                        },
+                        push,
+                    )
+                    .await?;
+                }
+                RunCommand::DnsTxt { target } => {
+                    run_streamed_attack::<DnsTxtScan>(
+                        DnsTxtScanSettings {
+                            domains: Vec::from([target.to_string()]),
+                        },
+                        push,
+                    )
+                    .await?;
+                }
+                RunCommand::CertificateTransparency {
+                    target,
+                    include_expired,
+                    max_retries,
+                    retry_interval,
+                } => {
+                    run_normal_attack::<CertificateTransparency>(
+                        CertificateTransparencySettings {
                             target,
                             include_expired,
                             max_retries,
                             retry_interval: Duration::from_millis(retry_interval as u64),
-                        };
-
-                        let entries = query_ct_api(ct).await?;
-
-                        for x in entries
-                            .iter()
-                            .flat_map(|e| {
-                                let mut name_value = e.name_value.clone();
-
-                                name_value.push(e.common_name.clone());
-                                name_value
-                            })
-                            .sorted()
-                            .dedup()
-                        {
-                            info!("{x}");
-                        }
-
-                        info!("Sending results to kraken");
-
-                        let endpoint = kraken_endpoint(&config.kraken)?;
-                        let chan = endpoint.connect().await.unwrap();
-
-                        let mut client = PushAttackServiceClient::new(chan);
-                        client
-                            .push_attack(PushAttackRequest {
-                                workspace_uuid: workspace.to_string(),
-                                api_key,
-                                response: Some(
-                                    push_attack_request::Response::CertificateTransparency(
-                                        CertificateTransparencyResponse {
-                                            entries: entries
-                                                .into_iter()
-                                                .map(|x| CertEntry {
-                                                    value_names: x.name_value,
-                                                    common_name: x.common_name,
-                                                    serial_number: x.serial_number,
-                                                    not_after: x.not_after.map(|ts| {
-                                                        Timestamp::date_time_nanos(
-                                                            ts.year() as i64,
-                                                            ts.month() as u8,
-                                                            ts.day() as u8,
-                                                            ts.hour() as u8,
-                                                            ts.minute() as u8,
-                                                            ts.second() as u8,
-                                                            ts.nanosecond(),
-                                                        )
-                                                        .unwrap()
-                                                    }),
-                                                    not_before: x.not_before.map(|ts| {
-                                                        Timestamp::date_time_nanos(
-                                                            ts.year() as i64,
-                                                            ts.month() as u8,
-                                                            ts.day() as u8,
-                                                            ts.hour() as u8,
-                                                            ts.minute() as u8,
-                                                            ts.second() as u8,
-                                                            ts.nanosecond(),
-                                                        )
-                                                        .unwrap()
-                                                    }),
-                                                    issuer_name: x.issuer_name,
-                                                })
-                                                .collect(),
-                                        },
-                                    ),
-                                ),
-                            })
-                            .await
-                            .unwrap();
-
-                        info!("Finished sending results to kraken")
-                    }
-                    _ => todo!("Not supported right now for pushing to kraken"),
+                        },
+                        push,
+                    )
+                    .await?;
                 }
-            } else {
-                match command {
-                    RunCommand::BruteforceSubdomains {
-                        target,
-                        wordlist_path,
-                        concurrent_limit,
-                    } => {
-                        run_streamed_attack::<BruteforceSubdomain>(BruteforceSubdomainsSettings {
-                            domain: target.to_string(),
-                            wordlist_path,
-                            concurrent_limit: u32::from(concurrent_limit),
-                        })
-                        .await?;
-                    }
-                    RunCommand::DnsTxt { target } => {
-                        run_streamed_attack::<DnsTxtScan>(DnsTxtScanSettings {
-                            domains: Vec::from([target.to_string()]),
-                        })
-                        .await?;
-                    }
-                    RunCommand::CertificateTransparency {
-                        target,
-                        include_expired,
-                        max_retries,
-                        retry_interval,
-                    } => {
-                        run_normal_attack::<CertificateTransparency>(
-                            CertificateTransparencySettings {
-                                target,
-                                include_expired,
-                                max_retries,
-                                retry_interval: Duration::from_millis(retry_interval as u64),
-                            },
-                        )
-                        .await?;
-                    }
-                    RunCommand::PortScanner {
-                        targets,
-                        technique,
-                        ports,
-                        timeout,
-                        concurrent_limit,
-                        max_retries,
-                        retry_interval,
-                        skip_icmp_check,
-                    } => {
-                        let addresses = targets
-                            .iter()
-                            .map(|s| IpNetwork::from_str(s))
-                            .collect::<Result<_, _>>()?;
+                RunCommand::PortScanner {
+                    targets,
+                    technique,
+                    ports,
+                    timeout,
+                    concurrent_limit,
+                    max_retries,
+                    retry_interval,
+                    skip_icmp_check,
+                } => {
+                    let addresses = targets
+                        .iter()
+                        .map(|s| IpNetwork::from_str(s))
+                        .collect::<Result<_, _>>()?;
 
-                        let mut port_range = vec![];
-                        if ports.is_empty() {
-                            port_range.push(1..=u16::MAX);
-                        } else {
-                            utils::parse_ports(&ports, &mut port_range)?;
-                        }
+                    let mut port_range = vec![];
+                    if ports.is_empty() {
+                        port_range.push(1..=u16::MAX);
+                    } else {
+                        utils::parse_ports(&ports, &mut port_range)?;
+                    }
 
-                        match technique {
-                            PortScanTechnique::TcpCon => {
-                                run_streamed_attack::<TcpPortScanner>(TcpPortScannerSettings {
+                    match technique {
+                        PortScanTechnique::TcpCon => {
+                            run_streamed_attack::<TcpPortScanner>(
+                                TcpPortScannerSettings {
                                     addresses,
                                     ports: port_range,
                                     timeout: Duration::from_millis(timeout as u64),
@@ -462,93 +387,103 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     max_retries,
                                     retry_interval: Duration::from_millis(retry_interval as u64),
                                     concurrent_limit: u32::from(concurrent_limit),
-                                })
-                                .await?;
-                            }
-                            PortScanTechnique::Icmp => {
-                                run_streamed_attack::<IcmpScan>(IcmpScanSettings {
+                                },
+                                push,
+                            )
+                            .await?;
+                        }
+                        PortScanTechnique::Icmp => {
+                            run_streamed_attack::<IcmpScan>(
+                                IcmpScanSettings {
                                     addresses,
                                     timeout: Duration::from_millis(timeout as u64),
                                     concurrent_limit: u32::from(concurrent_limit),
-                                })
-                                .await?;
-                            }
+                                },
+                                push,
+                            )
+                            .await?;
                         }
                     }
-                    RunCommand::Dehashed { query } => {
-                        let email = match env::var("DEHASHED_EMAIL") {
-                            Ok(x) => x,
-                            Err(_) => {
-                                error!("Missing environment variable DEHASHED_EMAIL");
-                                return Err("Missing environment variable DEHASHED_EMAIL".into());
-                            }
-                        };
-                        let api_key = match env::var("DEHASHED_API_KEY") {
-                            Ok(x) => x,
-                            Err(_) => {
-                                error!("Missing environment variable DEHASHED_API_KEY");
-                                return Err("Missing environment variable DEHASHED_API_KEY".into());
-                            }
-                        };
-
-                        match dehashed::query(
-                            email,
-                            api_key,
-                            dehashed_rs::Query::Domain(SearchType::Simple(query)),
-                        )
-                        .await
-                        {
-                            Ok(x) => {
-                                for entry in x.entries {
-                                    info!("{entry:?}");
-                                }
-                            }
-                            Err(err) => error!("{err}"),
+                }
+                RunCommand::Dehashed { query } => {
+                    let email = match env::var("DEHASHED_EMAIL") {
+                        Ok(x) => x,
+                        Err(_) => {
+                            error!("Missing environment variable DEHASHED_EMAIL");
+                            return Err("Missing environment variable DEHASHED_EMAIL".into());
                         }
-                    }
-                    RunCommand::Whois { query } => match whois::query_whois(query).await {
-                        Ok(x) => info!("Found result\n{x:#?}"),
+                    };
+                    let api_key = match env::var("DEHASHED_API_KEY") {
+                        Ok(x) => x,
+                        Err(_) => {
+                            error!("Missing environment variable DEHASHED_API_KEY");
+                            return Err("Missing environment variable DEHASHED_API_KEY".into());
+                        }
+                    };
 
+                    match dehashed::query(
+                        email,
+                        api_key,
+                        dehashed_rs::Query::Domain(SearchType::Simple(query)),
+                    )
+                    .await
+                    {
+                        Ok(x) => {
+                            for entry in x.entries {
+                                info!("{entry:?}");
+                            }
+                        }
                         Err(err) => error!("{err}"),
-                    },
-                    RunCommand::ServiceDetection {
-                        addr,
-                        port,
-                        timeout: wait_for_response,
-                        dont_stop_on_match: debug,
-                    } => {
-                        run_normal_attack::<ServiceDetection>(DetectServiceSettings {
+                    }
+                }
+                RunCommand::Whois { query } => match whois::query_whois(query).await {
+                    Ok(x) => info!("Found result\n{x:#?}"),
+
+                    Err(err) => error!("{err}"),
+                },
+                RunCommand::ServiceDetection {
+                    addr,
+                    port,
+                    timeout: wait_for_response,
+                    dont_stop_on_match: debug,
+                } => {
+                    run_normal_attack::<ServiceDetection>(
+                        DetectServiceSettings {
                             socket: SocketAddr::new(addr, port),
                             timeout: Duration::from_millis(wait_for_response),
                             always_run_everything: debug,
-                        })
-                        .await?;
+                        },
+                        push,
+                    )
+                    .await?;
+                }
+                RunCommand::ServiceDetectionUdp {
+                    addr,
+                    ports,
+                    timeout,
+                    port_retries,
+                    retry_interval,
+                    concurrent_limit,
+                } => {
+                    let mut port_range = vec![];
+                    if ports.is_empty() {
+                        port_range.push(1..=u16::MAX);
+                    } else {
+                        utils::parse_ports(&ports, &mut port_range)?;
                     }
-                    RunCommand::ServiceDetectionUdp {
-                        addr,
-                        ports,
-                        timeout,
-                        port_retries,
-                        retry_interval,
-                        concurrent_limit,
-                    } => {
-                        let mut port_range = vec![];
-                        if ports.is_empty() {
-                            port_range.push(1..=u16::MAX);
-                        } else {
-                            utils::parse_ports(&ports, &mut port_range)?;
-                        }
 
-                        run_streamed_attack::<UdpServiceDetection>(UdpServiceDetectionSettings {
+                    run_streamed_attack::<UdpServiceDetection>(
+                        UdpServiceDetectionSettings {
                             ip: addr,
                             ports: port_range,
                             max_retries: port_retries,
                             retry_interval: Duration::from_millis(retry_interval),
                             timeout: Duration::from_millis(timeout),
                             concurrent_limit: u32::from(concurrent_limit),
-                        })
-                        .await?;
-                    }
+                        },
+                        push,
+                    )
+                    .await?;
                 }
             }
         }
@@ -600,20 +535,112 @@ async fn get_db(config: &Config) -> Result<Database, String> {
         .map_err(|e| format!("Error connecting to the database: {e}"))
 }
 
-async fn run_normal_attack<A: Attack>(settings: A::Settings) -> Result<(), A::Error> {
+async fn run_normal_attack<A: Attack>(
+    settings: A::Settings,
+    push: Option<(Endpoint, Uuid, String)>,
+) -> Result<(), Box<dyn Error>> {
     let output = A::execute(settings).await?;
+
     A::print_output(&output);
+
+    if let Some((endpoint, workspace, api_key)) = push {
+        if ask_push_confirmation(&output)?.is_continue() {
+            let mut kraken = PushAttackServiceClient::connect(endpoint).await?;
+            kraken
+                .push_attack(PushAttackRequest {
+                    workspace_uuid: workspace.to_string(),
+                    api_key,
+                    response: Some(A::wrap_for_push(A::encode_output(output))),
+                })
+                .await?;
+        }
+    }
+
     Ok(())
 }
 
-async fn run_streamed_attack<A: StreamedAttack>(settings: A::Settings) -> Result<(), A::Error> {
+async fn run_streamed_attack<A: StreamedAttack>(
+    settings: A::Settings,
+    push: Option<(Endpoint, Uuid, String)>,
+) -> Result<(), Box<dyn Error>> {
     let (tx, mut rx) = mpsc::channel::<A::Output>(1);
 
-    task::spawn(async move {
+    let should_collect = push.is_some();
+    let collector = task::spawn(async move {
+        let mut outputs = Vec::new();
         while let Some(output) = rx.recv().await {
             A::print_output(&output);
+            if should_collect {
+                outputs.push(output);
+            }
         }
+        outputs
     });
 
-    A::execute(settings, tx).await
+    A::execute(settings, tx).await?;
+    let outputs = collector.await?;
+
+    if let Some((endpoint, workspace, api_key)) = push {
+        if ask_push_confirmation(&outputs)?.is_continue() {
+            let mut kraken = PushAttackServiceClient::connect(endpoint).await?;
+            kraken
+                .push_attack(PushAttackRequest {
+                    workspace_uuid: workspace.to_string(),
+                    api_key,
+                    response: Some(A::wrap_for_push(
+                        outputs.into_iter().map(A::encode_output).collect(),
+                    )),
+                })
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn ask_push_confirmation(data: &impl Debug) -> io::Result<ControlFlow<()>> {
+    let pager = env::var("PAGER")
+        .ok()
+        .or_else(|| {
+            Path::new("/usr/bin/pager")
+                .exists()
+                .then_some("/usr/bin/pager".to_string())
+        })
+        .unwrap_or_else(|| "less".to_string());
+
+    loop {
+        print!("Do you want to push these results? [y/N/p/pp/?]: ");
+        stdout().flush()?;
+
+        let mut input = String::new();
+        stdin().read_line(&mut input)?;
+        input = input.trim().to_ascii_lowercase();
+
+        match input.as_str() {
+            "" | "n" => return Ok(ControlFlow::Break(())),
+            "y" => return Ok(ControlFlow::Continue(())),
+            "p" | "pp" => {
+                let mut process = std::process::Command::new(&pager)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::inherit())
+                    .spawn()?;
+
+                if input.len() == 1 {
+                    write!(process.stdin.take().unwrap(), "{data:?}")?;
+                } else {
+                    write!(process.stdin.take().unwrap(), "{data:#?}")?;
+                }
+
+                process.wait()?;
+            }
+            "?" => {
+                println!("y  - yes");
+                println!("n  - no");
+                println!("p  - print data to push");
+                println!("pp - pretty print data to push");
+                println!("?  - show this message");
+            }
+            _ => println!("Unknown option"),
+        }
+    }
 }

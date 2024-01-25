@@ -9,7 +9,9 @@ use std::time::Duration;
 use chrono::{Datelike, Timelike};
 use itertools::Itertools;
 use kraken_proto::shared::CertEntry;
-use kraken_proto::{CertificateTransparencyRequest, CertificateTransparencyResponse};
+use kraken_proto::{
+    push_attack_request, CertificateTransparencyRequest, CertificateTransparencyResponse,
+};
 use log::{error, info};
 use prost_types::Timestamp;
 use rorm::{Database, DatabaseConfiguration, DatabaseDriver};
@@ -90,6 +92,10 @@ impl Attack for CertificateTransparency {
         for value in values {
             info!("{value}");
         }
+    }
+
+    fn wrap_for_push(response: Self::Response) -> push_attack_request::Response {
+        push_attack_request::Response::CertificateTransparency(response)
     }
 }
 

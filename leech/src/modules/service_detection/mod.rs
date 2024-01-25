@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kraken_proto::shared::Address;
-use kraken_proto::{ServiceCertainty, ServiceDetectionRequest, ServiceDetectionResponse};
+use kraken_proto::{
+    push_attack_request, ServiceCertainty, ServiceDetectionRequest, ServiceDetectionResponse,
+};
 use log::{debug, info, trace, warn};
 use probe_config::generated::Match;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -75,6 +77,10 @@ impl Attack for ServiceDetection {
 
     fn print_output(output: &Self::Output) {
         info!("{output:?}");
+    }
+
+    fn wrap_for_push(response: Self::Response) -> push_attack_request::Response {
+        push_attack_request::Response::ServiceDetection(response)
     }
 }
 
