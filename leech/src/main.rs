@@ -36,9 +36,13 @@ use ipnetwork::IpNetwork;
 use itertools::Itertools;
 use kraken_proto::push_attack_request;
 use kraken_proto::push_attack_service_client::PushAttackServiceClient;
+use kraken_proto::shared;
 use kraken_proto::shared::CertEntry;
 use kraken_proto::CertificateTransparencyResponse;
 use kraken_proto::PushAttackRequest;
+use kraken_proto::RepeatedServiceDetectionResponse;
+use kraken_proto::ServiceCertainty;
+use kraken_proto::ServiceDetectionResponse;
 use log::error;
 use log::info;
 use log::warn;
@@ -48,6 +52,7 @@ use rorm::Database;
 use rorm::DatabaseConfiguration;
 use tokio::sync::mpsc;
 use tokio::task;
+use tokio::try_join;
 use uuid::Uuid;
 
 use crate::backlog::start_backlog;
@@ -70,6 +75,7 @@ use crate::modules::service_detection;
 use crate::modules::service_detection::tcp::start_tcp_service_detection;
 use crate::modules::service_detection::tcp::TcpServiceDetectionResult;
 use crate::modules::service_detection::tcp::TcpServiceDetectionSettings;
+use crate::modules::service_detection::Service;
 use crate::modules::testssl;
 use crate::modules::testssl::TestSSLSettings;
 use crate::modules::whois;
@@ -486,6 +492,114 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         },
                                     ),
                                 ),
+                            })
+                            .await
+                            .unwrap();
+
+                        info!("Finished sending results to kraken")
+                    }
+                    RunCommand::ServiceDetectionTcp {
+                        targets,
+                        ports,
+                        connect_timeout,
+                        receive_timeout,
+                        concurrent_limit,
+                        max_retries,
+                        retry_interval,
+                        skip_icmp_check,
+                        just_scan,
+                    } => {
+                        let addresses = targets
+                            .iter()
+                            .map(|s| IpNetwork::from_str(s))
+                            .collect::<Result<_, _>>()?;
+
+                        let (tx, mut rx) = mpsc::channel::<TcpServiceDetectionResult>(1);
+                        let scan_future = start_tcp_service_detection(
+                            TcpServiceDetectionSettings {
+                                addresses,
+                                ports: utils::parse_ports(&ports, Some(1..=u16::MAX))?,
+                                connect_timeout: Duration::from_millis(connect_timeout as u64),
+                                receive_timeout: Duration::from_millis(receive_timeout as u64),
+                                max_retries,
+                                retry_interval: Duration::from_millis(retry_interval as u64),
+                                concurrent_limit,
+                                skip_icmp_check,
+                                just_scan,
+                            },
+                            tx,
+                        );
+                        let ((), results) = try_join! {
+                            scan_future,
+                            async move {
+                                let mut results = Vec::new();
+                                while let Some(result) = rx.recv().await {
+                                    results.push(result);
+                                }
+                                Ok(results)
+                            }
+                        }
+                        .map_err(|e| e.to_string())?;
+
+                        info!("Sending results to kraken");
+
+                        let endpoint = kraken_endpoint(&config.kraken)?;
+                        let chan = endpoint.connect().await.unwrap();
+
+                        let mut client = PushAttackServiceClient::new(chan);
+                        client
+                            .push_attack(PushAttackRequest {
+                                workspace_uuid: workspace.to_string(),
+                                api_key,
+                                response: Some(push_attack_request::Response::ServiceDetection(
+                                    RepeatedServiceDetectionResponse {
+                                        responses: results
+                                            .into_iter()
+                                            .map(|TcpServiceDetectionResult {
+                                                      tls_service,
+                                                      tcp_service,
+                                                      addr,
+                                                  }| {
+                                                let mut response = ServiceDetectionResponse {
+                                                    address: Some(shared::Address::from(addr.ip())),
+                                                    port: addr.port() as u32,
+                                                    // The following are updated in the 2 match statements below
+                                                    is_tls: true,
+                                                    tcp_certainty: ServiceCertainty::Unknown as _,
+                                                    tcp_services: Vec::new(),
+                                                    tls_certainty: ServiceCertainty::Unknown as _,
+                                                    tls_services: Vec::new(),
+                                                };
+                                                match tcp_service {
+                                                    Service::Unknown => (),
+                                                    Service::Maybe(services) => {
+                                                        response.tcp_certainty = ServiceCertainty::Maybe as _;
+                                                        response.tcp_services = services.into_iter().map(str::to_string).collect();
+                                                    }
+                                                    Service::Definitely(service) => {
+                                                        response.tcp_certainty = ServiceCertainty::Definitely as _;
+                                                        response.tcp_services = vec![service.to_string()];
+                                                    }
+                                                }
+                                                match tls_service {
+                                                    None => {
+                                                        response.is_tls = false;
+                                                    }
+                                                    Some(Service::Unknown) => (),
+                                                    Some(Service::Maybe(services)) => {
+                                                        response.tls_certainty = ServiceCertainty::Maybe as _;
+                                                        response.tls_services = services.into_iter().map(str::to_string).collect();
+                                                    }
+                                                    Some(Service::Definitely(service)) => {
+                                                        response.tls_certainty = ServiceCertainty::Definitely as _;
+                                                        response.tls_services = vec![service.to_string()];
+                                                    }
+                                                }
+                                                response
+                                            })
+                                            .collect(),
+                                    },
+                                )),
                             })
                             .await
                             .unwrap();

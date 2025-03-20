@@ -18,6 +18,8 @@ services:
     restart: unless-stopped
     depends_on: [ postgres-kraken-dev ]
     networks: [ net-kraken ]
+    ports:
+      - "127.0.0.1:31337:31337"
     volumes:
       - kraken-vol:/var/lib/kraken
       - ./kraken/migrations:/migrations
