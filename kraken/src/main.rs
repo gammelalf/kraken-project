@@ -30,6 +30,7 @@ use kraken::chan::dehashed_manager::start_dehashed_manager;
 use kraken::chan::global::GlobalChan;
 use kraken::chan::global::GLOBAL;
 use kraken::chan::leech_manager::LeechManager;
+use kraken::chan::oidc::OpenIdConnect;
 use kraken::chan::settings_manager::start_settings_manager;
 use kraken::chan::ws_manager::chan::start_ws_manager;
 use kraken::config;
@@ -147,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 editor_cache,
                 aggregator,
                 editor_sync,
+                oidc: OpenIdConnect::discover().await?,
             });
 
             let rpc_handle =

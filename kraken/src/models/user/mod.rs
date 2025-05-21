@@ -31,6 +31,10 @@ pub struct OidcUser {
     #[rorm(primary_key)]
     pub uuid: Uuid,
 
+    /// Unique identifier used by the oidc provider
+    #[rorm(max_length = 255, unique)]
+    pub subject: String,
+
     /// The relation to the generic user
     #[rorm(on_update = "Cascade", on_delete = "Cascade")]
     pub user: ForeignModel<User>,

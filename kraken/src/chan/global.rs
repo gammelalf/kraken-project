@@ -9,6 +9,7 @@ use dehashed_rs::Scheduler;
 use rorm::Database;
 
 use crate::chan::leech_manager::LeechManager;
+use crate::chan::oidc::OpenIdConnect;
 use crate::chan::settings_manager::SettingsManagerChan;
 use crate::chan::ws_manager::chan::WsManagerChan;
 use crate::modules::aggregator::Aggregator;
@@ -58,6 +59,9 @@ pub struct GlobalChan {
 
     /// Live synchronization for the editor in the frontend
     pub editor_sync: EditorSync,
+
+    /// State required for open id connect logins
+    pub oidc: OpenIdConnect,
 }
 
 /// Simple [`OnceLock`] which panics in case of error.

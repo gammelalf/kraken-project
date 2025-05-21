@@ -15,6 +15,7 @@ use super::LocalUser;
 use super::LocalUserKey;
 use super::User;
 use crate::api::handler::common::error::ApiError;
+use crate::models::OidcUser;
 use crate::models::UserPermission;
 
 #[derive(Patch)]
@@ -127,7 +128,7 @@ impl User {
             .is_some())
     }
 
-    /// Insert a new [User]
+    /// Insert a new local [User]
     pub async fn insert_local_user(
         executor: impl Executor<'_>,
         username: String,
@@ -169,6 +170,51 @@ impl User {
                 uuid: Uuid::new_v4(),
                 user: ForeignModelByField::Key(uuid),
                 password_hash,
+            })
+            .await?;
+
+        guard.commit().await?;
+
+        Ok(uuid)
+    }
+
+    /// Insert a new oidc [`User`]
+    pub async fn insert_oidc_user(
+        executor: impl Executor<'_>,
+        subject: String,
+        username: String,
+        display_name: String,
+        permission: UserPermission,
+    ) -> Result<Uuid, InsertUserError> {
+        if username.is_empty() {
+            return Err(InsertUserError::InvalidUsername);
+        }
+
+        let mut guard = executor.ensure_transaction().await?;
+
+        let exists = User::exists_by_username(guard.get_transaction(), &username).await?;
+        if exists {
+            return Err(InsertUserError::UsernameAlreadyOccupied);
+        }
+
+        let uuid = Uuid::new_v4();
+
+        insert!(guard.get_transaction(), UserInsert)
+            .return_nothing()
+            .single(&UserInsert {
+                uuid,
+                username,
+                display_name,
+                permission,
+            })
+            .await?;
+
+        insert!(guard.get_transaction(), OidcUser)
+            .return_nothing()
+            .single(&OidcUser {
+                uuid: Uuid::new_v4(),
+                subject,
+                user: ForeignModelByField::Key(uuid),
             })
             .await?;
 

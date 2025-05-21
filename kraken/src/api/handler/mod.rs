@@ -22,6 +22,7 @@ pub mod leeches;
 pub mod oauth;
 pub mod oauth_applications;
 pub mod oauth_decisions;
+pub mod oidc;
 pub mod ports;
 pub mod services;
 pub mod settings;

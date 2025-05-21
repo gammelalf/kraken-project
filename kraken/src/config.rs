@@ -4,6 +4,8 @@ use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 
+use openidconnect::IssuerUrl;
+use openidconnect::RedirectUrl;
 use rorm::DatabaseDriver;
 use url::Url;
 
@@ -24,6 +26,10 @@ pub fn load_env() -> Result<(), Vec<&'static EnvError>> {
         GRPC_LISTEN_PORT.load(),
         SESSION_KEY.load(),
         ORIGIN_URL.load(),
+        OIDC_CLIENT_ID.load(),
+        OIDC_CLIENT_SECRET.load(),
+        OIDC_DISCOVER_URL.load(),
+        OIDC_REDIRECT_URL.load(),
         POSTGRES_HOST.load(),
         POSTGRES_DB.load(),
         POSTGRES_PORT.load(),
@@ -66,6 +72,19 @@ pub static SESSION_KEY: EnvVar = EnvVar::required("SESSION_KEY");
 ///
 /// This is used by the unused webauthn 👍
 pub static ORIGIN_URL: EnvVar<Url> = EnvVar::required("ORIGIN_URL");
+
+/// The client id of the server
+pub static OIDC_CLIENT_ID: EnvVar<openidconnect::ClientId> = EnvVar::required("OIDC_CLIENT_ID");
+
+/// The corresponding client secret
+pub static OIDC_CLIENT_SECRET: EnvVar<openidconnect::ClientSecret> =
+    EnvVar::required("OIDC_CLIENT_SECRET");
+
+/// The url the IDM server should redirect the user to
+pub static OIDC_REDIRECT_URL: EnvVar<RedirectUrl> = EnvVar::required("OIDC_REDIRECT_URL");
+
+/// The discovery url
+pub static OIDC_DISCOVER_URL: EnvVar<IssuerUrl> = EnvVar::required("OIDC_DISCOVER_URL");
 
 /// The address of the database server
 pub static POSTGRES_HOST: EnvVar = EnvVar::required("POSTGRES_HOST");

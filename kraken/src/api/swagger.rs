@@ -33,6 +33,7 @@ use crate::api::handler::leeches;
 use crate::api::handler::oauth;
 use crate::api::handler::oauth_applications;
 use crate::api::handler::oauth_decisions;
+use crate::api::handler::oidc;
 use crate::api::handler::ports;
 use crate::api::handler::services;
 use crate::api::handler::settings;
@@ -79,6 +80,8 @@ impl Modify for SecurityAddon2 {
         auth::handler::finish_auth,
         auth::handler::start_register,
         auth::handler::finish_register,
+        oidc::handler::begin_oidc_login,
+        oidc::handler::finish_oidc_login,
         bearer_tokens::handler_admin::create_bearer_token,
         bearer_tokens::handler_admin::list_all_bearer_tokens,
         bearer_tokens::handler_admin::delete_bearer_token,
@@ -254,6 +257,7 @@ impl Modify for SecurityAddon2 {
         aggregation_source::schema::SourceAttackResult,
         auth::schema::LoginRequest,
         auth::schema::FinishRegisterRequest,
+        oidc::schema::FinishOidcLoginRequest,
         bearer_tokens::schema::CreateBearerTokenRequest,
         bearer_tokens::schema::FullBearerToken,
         bearer_tokens::schema::ListBearerTokens,

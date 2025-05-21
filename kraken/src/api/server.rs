@@ -47,6 +47,7 @@ use crate::api::handler::http_services;
 use crate::api::handler::leeches;
 use crate::api::handler::oauth;
 use crate::api::handler::oauth_applications;
+use crate::api::handler::oidc;
 use crate::api::handler::ports;
 use crate::api::handler::services;
 use crate::api::handler::settings;
@@ -134,6 +135,11 @@ pub async fn start_server() -> Result<(), StartServerError> {
                     .service(auth::handler::finish_register)
                     .service(auth::handler::start_auth)
                     .service(auth::handler::finish_auth),
+            )
+            .service(
+                scope("/api/v1/oidc")
+                    .service(oidc::handler::begin_oidc_login)
+                    .service(oidc::handler::finish_oidc_login),
             )
             .service(
                 scope("/api/v1/oauth")
