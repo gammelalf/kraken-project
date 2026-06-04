@@ -12,7 +12,7 @@ use kraken::api::handler::hosts::schema::HostRelations;
 use kraken::api::handler::hosts::schema::ManualHostCertainty;
 use kraken::api::handler::hosts::schema::UpdateHostRequest;
 use uuid::Uuid;
-
+use kraken::api::handler::aggregation_source::schema::FullAggregationSource;
 use crate::error::KrakenError;
 use crate::KrakenClient;
 use crate::KrakenResult;
@@ -122,5 +122,19 @@ impl KrakenClient {
             .send()
             .await?;
         Ok(list.findings)
+    }
+
+    /// Get all data sources which referenced this host
+    pub async fn get_host_sources(
+        &self,
+        workspace: Uuid,
+        host: Uuid,
+    ) -> KrakenResult<FullAggregationSource> {
+        self
+            .get(&format!(
+                "api/v1/workspaces/{workspace}/hosts/{host}/sources"
+            ))
+            .send()
+            .await
     }
 }

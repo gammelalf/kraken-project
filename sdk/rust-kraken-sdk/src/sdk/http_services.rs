@@ -8,7 +8,7 @@ use kraken::api::handler::http_services::schema::GetAllHttpServicesQuery;
 use kraken::api::handler::http_services::schema::HttpServiceRelations;
 use kraken::api::handler::http_services::schema::UpdateHttpServiceRequest;
 use uuid::Uuid;
-
+use kraken::api::handler::aggregation_source::schema::FullAggregationSource;
 use crate::KrakenClient;
 use crate::KrakenResult;
 
@@ -109,5 +109,19 @@ impl KrakenClient {
             .send()
             .await?;
         Ok(list.findings)
+    }
+
+    /// Get all data sources which referenced this http_service
+    pub async fn get_http_service_sources(
+        &self,
+        workspace: Uuid,
+        http_service: Uuid,
+    ) -> KrakenResult<FullAggregationSource> {
+        self
+            .get(&format!(
+                "api/v1/workspaces/{workspace}/httpServices/{http_service}/sources"
+            ))
+            .send()
+            .await
     }
 }

@@ -13,7 +13,7 @@ use kraken::api::handler::ports::schema::PortProtocol;
 use kraken::api::handler::ports::schema::PortRelations;
 use kraken::api::handler::ports::schema::UpdatePortRequest;
 use uuid::Uuid;
-
+use kraken::api::handler::aggregation_source::schema::FullAggregationSource;
 use crate::KrakenClient;
 use crate::KrakenResult;
 
@@ -108,5 +108,19 @@ impl KrakenClient {
             .send()
             .await?;
         Ok(list.findings)
+    }
+
+    /// Get all data sources which referenced this port
+    pub async fn get_port_sources(
+        &self,
+        workspace: Uuid,
+        port: Uuid,
+    ) -> KrakenResult<FullAggregationSource> {
+        self
+            .get(&format!(
+                "api/v1/workspaces/{workspace}/ports/{port}/sources"
+            ))
+            .send()
+            .await
     }
 }
